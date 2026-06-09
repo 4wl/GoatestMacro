@@ -1,6 +1,7 @@
 package com.justingoat.goat.client;
 
 import com.justingoat.goat.client.gui.GoatMacroScreen;
+import com.justingoat.goat.client.module.ModuleManager;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.api.ClientModInitializer;
@@ -22,6 +23,8 @@ public class GoatClient implements ClientModInitializer {
             GLFW.GLFW_KEY_RIGHT_SHIFT,
             KeyBinding.Category.MISC
         ));
+
+        ClientTickEvents.START_CLIENT_TICK.register(ModuleManager::tick);
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (openGuiKeyBinding.wasPressed()) {
