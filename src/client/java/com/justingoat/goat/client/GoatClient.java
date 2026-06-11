@@ -18,6 +18,7 @@ import net.minecraft.text.Text;
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.module.pathfinder.PathRenderer;
+import com.justingoat.goat.client.utils.RotationInterpolator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.lwjgl.glfw.GLFW;
@@ -96,6 +97,7 @@ public class GoatClient implements ClientModInitializer {
         });
 
         PathRenderer.register();
+        RotationInterpolator.register();
 
         LOGGER.info("Goat client initialized.");
     }

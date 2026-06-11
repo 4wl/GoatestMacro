@@ -11,6 +11,7 @@ import com.justingoat.goat.client.module.pathfinder.PathProcessor;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.NumberValue;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.RotationInterpolator;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.BlockPos;
@@ -58,7 +59,8 @@ public class PathfinderTest extends GoatModule {
     public void setEnabled(boolean enabled) {
         super.setEnabled(enabled);
         if (!enabled) {
-            InputUtils.releaseAll();
+            pathProcessor.stop();
+            computing = false;
         }
     }
 

@@ -32,6 +32,7 @@ public class PathRenderer {
         {0.2f,  0.9f, 1.0f,  0.9f},  // STEP_UP — cyan
         {1.0f,  0.95f, 0.2f, 0.9f},  // DROP — yellow
         {1.0f,  0.3f, 0.9f,  0.9f},  // JUMP_ACROSS — magenta
+        {1.0f,  0.6f, 0.2f,  0.9f},  // CLIMB — orange
     };
     private static final float[] COLOR_CURRENT = {1.0f, 1.0f, 1.0f, 1.0f}; // white
     private static final float[] COLOR_LINE    = {0.3f, 0.85f, 1.0f, 0.6f}; // light blue
@@ -128,6 +129,7 @@ public class PathRenderer {
             case STEP_UP -> COLORS[1];
             case DROP -> COLORS[2];
             case JUMP_ACROSS -> COLORS[3];
+            case CLIMB -> COLORS[4];
         };
     }
 

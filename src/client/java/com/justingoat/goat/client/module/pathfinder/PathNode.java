@@ -8,7 +8,8 @@ public class PathNode {
         WALK,
         STEP_UP,
         DROP,
-        JUMP_ACROSS
+        JUMP_ACROSS,
+        CLIMB
     }
 
     private final BlockPos pos;

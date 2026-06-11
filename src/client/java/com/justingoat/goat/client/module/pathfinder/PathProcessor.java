@@ -2,6 +2,7 @@ package com.justingoat.goat.client.module.pathfinder;
 
 import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.RotationInterpolator;
 import com.justingoat.goat.client.utils.RotationUtils;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.BlockPos;
@@ -10,6 +11,7 @@ import net.minecraft.util.math.Vec3d;
 import net.minecraft.text.Text;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 public class PathProcessor {
 
@@ -25,6 +27,9 @@ public class PathProcessor {
     private int nudgeCooldown = 0;
     private int activeTicks = 0;
 
+    // Async repath state
+    private volatile boolean repathing = false;
+
     // ---------------------------------------------------------------- API
 
     public void setPath(List<PathNode> path) {
@@ -35,7 +40,9 @@ public class PathProcessor {
         this.stuckTicks = 0;
         this.nudgeCooldown = 0;
         this.activeTicks = 0;
+        this.repathing = false;
         this.rotation.clear();
+        RotationInterpolator.setActive(rotation);
     }
 
     public List<PathNode> getPath() { return path; }
@@ -45,10 +52,33 @@ public class PathProcessor {
         return path == null || currentIndex >= path.size();
     }
 
+    public void stop() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (rotation.isActive() && client.player != null) {
+            client.player.setYaw(rotation.getCurrentYaw());
+            client.player.setPitch(rotation.getCurrentPitch());
+        }
+        this.path = null;
+        this.repathing = false;
+        this.rotation.clear();
+        RotationInterpolator.clearActive();
+        InputUtils.releaseAll();
+    }
+
     // --------------------------------------------------------------- tick
 
     public void tick(MinecraftClient client, PathfinderTest settings) {
         if (isDone() || client.player == null) return;
+
+        if (repathing) {
+            InputUtils.releaseAll();
+            return;
+        }
+
+        // Initialize rotation state from player on first tick
+        if (!rotation.isActive()) {
+            rotation.init(client.player.getYaw(), client.player.getPitch());
+        }
 
         double px = client.player.getX();
         double py = client.player.getY();
@@ -64,7 +94,7 @@ public class PathProcessor {
             double fdz = pz - (lp.getZ() + 0.5);
             double fdy = Math.abs(py - (lp.getY() + 1.0));
             if (fdx * fdx + fdz * fdz < 1.0 && fdy < 1.5) {
-                finish();
+                finish(client);
                 return;
             }
         }
@@ -73,9 +103,6 @@ public class PathProcessor {
         if (handleStuck(client, px, pz, settings)) return;
 
         // ── 2. Waypoint arrival with DYNAMIC radius ─────────────────
-        //    Straight segments: tight 0.7-block radius.
-        //    Turns: widen up to ~3 blocks so the player "cuts" the corner
-        //    and never walks all the way to the wall.
         PathNode curNode = path.get(currentIndex);
         Vec3d curCenter = nodeCenter(curNode);
         double hDistSqCur = hDistSq(px, pz, curCenter.x, curCenter.z);
@@ -83,7 +110,8 @@ public class PathProcessor {
 
         double reach;
         double baseReach = settings.getWaypointReach();
-        if (curNode.getMoveType() != PathNode.MoveType.WALK) {
+        PathNode.MoveType curMoveType = curNode.getMoveType();
+        if (curMoveType != PathNode.MoveType.WALK) {
             reach = 1.0;
         } else {
             double turnAngle = getTurnAngle(currentIndex);
@@ -92,18 +120,23 @@ public class PathProcessor {
 
         if (hDistSqCur < reach * reach && vDistCur < 1.5) {
             currentIndex++;
-            if (isDone()) { finish(); return; }
+            if (isDone()) { finish(client); return; }
         }
 
         // ── 3. Determine aim target ─────────────────────────────────
         PathNode aimNode = path.get(currentIndex);
         Vec3d aimCenter = nodeCenter(aimNode);
+        PathNode.MoveType moveType = aimNode.getMoveType();
+
+        // ── CLIMB handling ──────────────────────────────────────────
+        if (moveType == PathNode.MoveType.CLIMB) {
+            handleClimb(client, aimCenter, py);
+            return;
+        }
 
         float aimYaw = calcYaw(px, pz, aimCenter.x, aimCenter.z);
 
-        // Anticipatory cornering: blend yaw toward the NEXT waypoint
-        // when approaching the current one. Combined with the dynamic
-        // arrival radius, this creates smooth arcs around corners.
+        // Anticipatory cornering
         if (currentIndex + 1 < path.size()) {
             double distToCur = Math.sqrt(hDistSq(px, pz, aimCenter.x, aimCenter.z));
             if (distToCur < 3.5) {
@@ -117,7 +150,6 @@ public class PathProcessor {
 
         // Natural walking pitch
         float navPitch;
-        PathNode.MoveType moveType = aimNode.getMoveType();
         if (moveType == PathNode.MoveType.STEP_UP) {
             navPitch = -5.0f;
         } else if (moveType == PathNode.MoveType.DROP) {
@@ -126,18 +158,14 @@ public class PathProcessor {
             navPitch = 10.0f;
         }
 
-        // ── 4. Smooth rotation ──────────────────────────────────────
+        // ── 4. Smooth rotation (tick the spring — no player write) ──
         rotation.setTarget(aimYaw, navPitch);
         rotation.setSpeed(settings.getRotationSpeed());
+        rotation.tick();
 
-        float[] rot = rotation.tick(client.player.getYaw(), client.player.getPitch());
-        if (rot != null) {
-            client.player.setYaw(rot[0]);
-            client.player.setPitch(rot[1]);
-        }
-
-        // ── 5. Movement ─────────────────────────────────────────────
-        float angleToTarget = Math.abs(MathHelper.wrapDegrees(aimYaw - client.player.getYaw()));
+        // ── 5. Movement (use rotation's internal yaw, not player's) ─
+        float currentYaw = rotation.getCurrentYaw();
+        float angleToTarget = Math.abs(MathHelper.wrapDegrees(aimYaw - currentYaw));
 
         if (angleToTarget > 70.0f) {
             InputUtils.setForward(false);
@@ -149,7 +177,7 @@ public class PathProcessor {
         }
 
         InputUtils.setForward(true);
-        applyStrafeCorrection(client, aimYaw);
+        applyStrafeCorrection(aimYaw, currentYaw);
 
         // ── 6. Jump logic ───────────────────────────────────────────
         boolean shouldJump = false;
@@ -170,10 +198,33 @@ public class PathProcessor {
         InputUtils.setSprint(wantSprint);
     }
 
+    // ──────────────────────────────────────────────────── climb
+
+    private void handleClimb(MinecraftClient client, Vec3d target, double py) {
+        InputUtils.setSprint(false);
+        InputUtils.setLeft(false);
+        InputUtils.setRight(false);
+
+        double dy = target.y - py;
+
+        if (dy > 0.5) {
+            InputUtils.setForward(true);
+            InputUtils.setJump(true);
+        } else {
+            InputUtils.setForward(true);
+            InputUtils.setJump(false);
+        }
+
+        float aimYaw = calcYaw(client.player.getX(), client.player.getZ(), target.x, target.z);
+        rotation.setTarget(aimYaw, dy > 0.5 ? -30.0f : (dy < -0.5 ? 30.0f : 0.0f));
+        rotation.setSpeed(0.6f);
+        rotation.tick();
+    }
+
     // ──────────────────────────────────────────────────── strafe
 
-    private void applyStrafeCorrection(MinecraftClient client, float aimYaw) {
-        float rel = MathHelper.wrapDegrees(aimYaw - client.player.getYaw());
+    private void applyStrafeCorrection(float aimYaw, float currentYaw) {
+        float rel = MathHelper.wrapDegrees(aimYaw - currentYaw);
 
         if (Math.abs(rel) < 8.0f) {
             InputUtils.setLeft(false);
@@ -192,7 +243,7 @@ public class PathProcessor {
     private boolean isJumpableObstacle(MinecraftClient client) {
         if (client.world == null) return false;
         BlockPos feet = client.player.getBlockPos();
-        float yaw = client.player.getYaw();
+        float yaw = rotation.getCurrentYaw();
         int dx = Math.round(-MathHelper.sin(yaw * 0.017453292f));
         int dz = Math.round(MathHelper.cos(yaw * 0.017453292f));
 
@@ -242,21 +293,36 @@ public class PathProcessor {
         if (stuckTicks == threshold && settings.canAutoRepath()) {
             BlockPos goal = path.get(path.size() - 1).getPos();
             client.player.sendMessage(
-                Text.literal("\u00a7e[Goat] Stuck \u2014 repathing..."), false);
-            List<PathNode> newPath = AStarPathfinder.computePath(
-                client.player.getBlockPos().down(), goal, settings.getMaxNodes(), settings.getMaxDrop());
-            if (newPath != null) {
-                setPath(newPath);
-            } else {
-                stuckTicks = 55;
-            }
+                Text.literal("§e[Goat] Stuck — repathing..."), false);
+
+            repathing = true;
+            InputUtils.releaseAll();
+
+            int maxNodes = settings.getMaxNodes();
+            int maxDrop = settings.getMaxDrop();
+            BlockPos start = client.player.getBlockPos().down();
+
+            CompletableFuture.supplyAsync(() ->
+                AStarPathfinder.computePath(start, goal, maxNodes, maxDrop)
+            ).thenAccept(newPath -> client.execute(() -> {
+                repathing = false;
+                if (newPath != null) {
+                    setPath(newPath);
+                    client.player.sendMessage(
+                        Text.literal("§a[Goat] Repath done — " + newPath.size() + " nodes."), false);
+                } else {
+                    stuckTicks = threshold + threshold / 2;
+                    client.player.sendMessage(
+                        Text.literal("§c[Goat] Repath failed."), false);
+                }
+            }));
             return true;
         }
 
         if (stuckTicks >= threshold * 2) {
             client.player.sendMessage(
-                Text.literal("\u00a7c[Goat] Repath failed. Stopping."), false);
-            finish();
+                Text.literal("§c[Goat] Repath failed. Stopping."), false);
+            finish(client);
             return true;
         }
 
@@ -265,16 +331,18 @@ public class PathProcessor {
 
     // ────────────────────────────────────────────────── helpers
 
-    private void finish() {
+    private void finish(MinecraftClient client) {
+        // Commit final rotation to player before releasing
+        if (rotation.isActive() && client.player != null) {
+            client.player.setYaw(rotation.getCurrentYaw());
+            client.player.setPitch(rotation.getCurrentPitch());
+        }
         this.path = null;
+        this.rotation.clear();
+        RotationInterpolator.clearActive();
         InputUtils.releaseAll();
     }
 
-    /**
-     * Calculate the turn angle at waypoint idx.
-     * Compares the direction from (idx-1 → idx) vs (idx → idx+1).
-     * Returns 0 for straight, PI for U-turn.
-     */
     private double getTurnAngle(int idx) {
         if (idx <= 0 || idx + 1 >= path.size()) return 0;
 

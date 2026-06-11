@@ -9,22 +9,15 @@ import java.util.Map;
 import java.util.PriorityQueue;
 
 import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
+import net.minecraft.block.FluidBlock;
+import net.minecraft.block.LadderBlock;
+import net.minecraft.block.VineBlock;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.shape.VoxelShape;
+import net.minecraft.world.chunk.WorldChunk;
 
-/**
- * A* pathfinder for Minecraft 1.21.11.
- *
- * Coordinate convention: PathNode position = the solid ground block the player
- * stands ON. Player feet occupy pos.up(1), head occupies pos.up(2).
- *
- * Move types:
- *   WALK         — horizontal same-Y (cardinal + diagonal with corner check)
- *   STEP_UP      — cardinal Y+1 (requires jump)
- *   DROP         — cardinal/diagonal Y-1..Y-3 (safe fall)
- *   JUMP_ACROSS  — cardinal 1-gap or 2-gap (sprint-jump)
- */
 public class AStarPathfinder {
 
     private static final int[][] CARDINALS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
@@ -60,7 +53,6 @@ public class AStarPathfinder {
         while (!openSet.isEmpty() && evaluated < maxNodes) {
             PathNode current = openSet.poll();
 
-            // Stale entry — we already found a cheaper route to this pos
             Double best = bestCost.get(current.getPos());
             if (best != null && current.getGCost() > best) continue;
 
@@ -86,33 +78,31 @@ public class AStarPathfinder {
         return null;
     }
 
-    // ------------------------------------------------------------------ goal
     private static boolean isGoal(BlockPos pos, BlockPos end) {
         return pos.getX() == end.getX()
             && pos.getZ() == end.getZ()
             && Math.abs(pos.getY() - end.getY()) <= 1;
     }
 
-    // --------------------------------------------------------- ground snap
     private static BlockPos snapToGround(MinecraftClient client, BlockPos pos) {
+        if (!isChunkLoaded(client, pos)) return null;
         if (isSolid(client, pos) && isPassable(client, pos.up(1))) return pos;
 
-        // Search down up to 5 blocks
         BlockPos probe = pos;
         for (int i = 0; i < 5; i++) {
             probe = probe.down();
+            if (!isChunkLoaded(client, probe)) return null;
             if (isSolid(client, probe) && isPassable(client, probe.up(1))) return probe;
         }
-        // Search up up to 3 blocks
         probe = pos;
         for (int i = 0; i < 3; i++) {
             probe = probe.up();
+            if (!isChunkLoaded(client, probe)) return null;
             if (isSolid(client, probe) && isPassable(client, probe.up(1))) return probe;
         }
         return null;
     }
 
-    // ------------------------------------------------------- neighbor gen
     private static List<PathNode> getNeighbors(PathNode current, MinecraftClient client) {
         List<PathNode> out = new ArrayList<>();
         BlockPos pos = current.getPos();
@@ -128,6 +118,8 @@ public class AStarPathfinder {
             tryDropDiag(out, client, pos, d[0], d[1]);
         }
 
+        tryClimb(out, client, pos);
+
         return out;
     }
 
@@ -135,8 +127,9 @@ public class AStarPathfinder {
     private static void tryWalk(List<PathNode> out, MinecraftClient c,
                                  BlockPos pos, int dx, int dz) {
         BlockPos t = pos.add(dx, 0, dz);
+        if (!isChunkLoaded(c, t)) return;
         if (!isSolid(c, t)) return;
-        if (!isPassable(c, t.up(1)) || !isPassable(c, t.up(2))) return;
+        if (!isSafePassable(c, t.up(1)) || !isSafePassable(c, t.up(2))) return;
 
         PathNode n = new PathNode(t, PathNode.MoveType.WALK);
         n.setMoveCost(1.0);
@@ -147,55 +140,53 @@ public class AStarPathfinder {
     private static void tryWalkDiag(List<PathNode> out, MinecraftClient c,
                                      BlockPos pos, int dx, int dz) {
         BlockPos t = pos.add(dx, 0, dz);
+        if (!isChunkLoaded(c, t)) return;
         if (!isSolid(c, t)) return;
-        if (!isPassable(c, t.up(1)) || !isPassable(c, t.up(2))) return;
+        if (!isSafePassable(c, t.up(1)) || !isSafePassable(c, t.up(2))) return;
 
-        // Corner clearance — both adjacent cardinal columns must be passable
-        if (!isPassable(c, pos.add(dx, 1, 0)) || !isPassable(c, pos.add(dx, 2, 0))) return;
-        if (!isPassable(c, pos.add(0, 1, dz)) || !isPassable(c, pos.add(0, 2, dz))) return;
+        if (!isSafePassable(c, pos.add(dx, 1, 0)) || !isSafePassable(c, pos.add(dx, 2, 0))) return;
+        if (!isSafePassable(c, pos.add(0, 1, dz)) || !isSafePassable(c, pos.add(0, 2, dz))) return;
 
         PathNode n = new PathNode(t, PathNode.MoveType.WALK);
         n.setMoveCost(1.414);
         out.add(n);
     }
 
-    // ---- STEP UP (Y+1, cardinal only, requires jump) ----
+    // ---- STEP UP (Y+1, cardinal only) ----
     private static void tryStepUp(List<PathNode> out, MinecraftClient c,
                                    BlockPos pos, int dx, int dz) {
         BlockPos t = pos.add(dx, 1, dz);
+        if (!isChunkLoaded(c, t)) return;
         if (!isSolid(c, t)) return;
-        if (!isPassable(c, t.up(1)) || !isPassable(c, t.up(2))) return;
-        // Head clearance for the jump arc at current position
-        if (!isPassable(c, pos.up(3))) return;
-        // Also need the column in front at current level to be passable (feet walk into it)
-        if (!isPassable(c, pos.add(dx, 2, dz))) return;
+        if (!isSafePassable(c, t.up(1)) || !isSafePassable(c, t.up(2))) return;
+        if (!isSafePassable(c, pos.up(3))) return;
+        if (!isSafePassable(c, pos.add(dx, 2, dz))) return;
 
         PathNode n = new PathNode(t, PathNode.MoveType.STEP_UP);
         n.setMoveCost(2.0);
         out.add(n);
     }
 
-    // ---- DROP (Y-1..Y-3, cardinal) ----
+    // ---- DROP (Y-1..Y-maxDrop, cardinal) ----
     private static void tryDrop(List<PathNode> out, MinecraftClient c,
                                  BlockPos pos, int dx, int dz) {
-        // Entry clearance — must be able to walk into the adjacent column
-        if (!isPassable(c, pos.add(dx, 1, dz)) || !isPassable(c, pos.add(dx, 2, dz))) return;
+        if (!isSafePassable(c, pos.add(dx, 1, dz)) || !isSafePassable(c, pos.add(dx, 2, dz))) return;
 
         for (int drop = 1; drop <= maxDropDistance; drop++) {
             BlockPos t = pos.add(dx, -drop, dz);
+            if (!isChunkLoaded(c, t)) break;
             if (isSolid(c, t)) {
-                if (!isPassable(c, t.up(1)) || !isPassable(c, t.up(2))) break;
-                // Fall column clear
+                if (!isSafePassable(c, t.up(1)) || !isSafePassable(c, t.up(2))) break;
                 boolean clear = true;
                 for (int y = 0; y >= -drop + 2; y--) {
-                    if (!isPassable(c, pos.add(dx, y, dz))) { clear = false; break; }
+                    if (!isSafePassable(c, pos.add(dx, y, dz))) { clear = false; break; }
                 }
                 if (!clear) break;
 
                 PathNode n = new PathNode(t, PathNode.MoveType.DROP);
                 n.setMoveCost(1.0 + drop * 0.5);
                 out.add(n);
-                break; // found landing
+                break;
             }
         }
     }
@@ -203,18 +194,18 @@ public class AStarPathfinder {
     // ---- DROP (diagonal) ----
     private static void tryDropDiag(List<PathNode> out, MinecraftClient c,
                                      BlockPos pos, int dx, int dz) {
-        // Entry + corner clearance
-        if (!isPassable(c, pos.add(dx, 1, dz)) || !isPassable(c, pos.add(dx, 2, dz))) return;
-        if (!isPassable(c, pos.add(dx, 1, 0)) || !isPassable(c, pos.add(dx, 2, 0))) return;
-        if (!isPassable(c, pos.add(0, 1, dz)) || !isPassable(c, pos.add(0, 2, dz))) return;
+        if (!isSafePassable(c, pos.add(dx, 1, dz)) || !isSafePassable(c, pos.add(dx, 2, dz))) return;
+        if (!isSafePassable(c, pos.add(dx, 1, 0)) || !isSafePassable(c, pos.add(dx, 2, 0))) return;
+        if (!isSafePassable(c, pos.add(0, 1, dz)) || !isSafePassable(c, pos.add(0, 2, dz))) return;
 
         for (int drop = 1; drop <= maxDropDistance; drop++) {
             BlockPos t = pos.add(dx, -drop, dz);
+            if (!isChunkLoaded(c, t)) break;
             if (isSolid(c, t)) {
-                if (!isPassable(c, t.up(1)) || !isPassable(c, t.up(2))) break;
+                if (!isSafePassable(c, t.up(1)) || !isSafePassable(c, t.up(2))) break;
                 boolean clear = true;
                 for (int y = 0; y >= -drop + 2; y--) {
-                    if (!isPassable(c, pos.add(dx, y, dz))) { clear = false; break; }
+                    if (!isSafePassable(c, pos.add(dx, y, dz))) { clear = false; break; }
                 }
                 if (!clear) break;
 
@@ -226,42 +217,108 @@ public class AStarPathfinder {
         }
     }
 
-    // ---- JUMP ACROSS (1-gap and 2-gap, cardinal only) ----
+    // ---- JUMP ACROSS (1-gap and 2-gap, cardinal) ----
     private static void tryJumpAcross(List<PathNode> out, MinecraftClient c,
                                        BlockPos pos, int dx, int dz) {
-        // Must have a gap at the adjacent block (no ground)
         BlockPos gap1 = pos.add(dx, 0, dz);
+        if (!isChunkLoaded(c, gap1)) return;
         if (isSolid(c, gap1)) return;
 
-        // Air clearance through the gap
-        if (!isPassable(c, gap1.up(1)) || !isPassable(c, gap1.up(2))) return;
-        // Jump arc clearance
-        if (!isPassable(c, pos.up(3))) return;
+        if (!isSafePassable(c, gap1.up(1)) || !isSafePassable(c, gap1.up(2))) return;
+        if (!isSafePassable(c, pos.up(3))) return;
 
-        // --- 1-gap: land at 2*dir ---
         BlockPos land1 = pos.add(2 * dx, 0, 2 * dz);
-        if (isSolid(c, land1) && isPassable(c, land1.up(1)) && isPassable(c, land1.up(2))) {
+        if (!isChunkLoaded(c, land1)) return;
+        if (isSolid(c, land1) && isSafePassable(c, land1.up(1)) && isSafePassable(c, land1.up(2))) {
             PathNode n = new PathNode(land1, PathNode.MoveType.JUMP_ACROSS);
             n.setMoveCost(3.0);
             out.add(n);
             return;
         }
 
-        // --- 2-gap: gap extends to 2*dir, land at 3*dir ---
         if (isSolid(c, land1)) return;
-        if (!isPassable(c, land1.up(1)) || !isPassable(c, land1.up(2))) return;
+        if (!isSafePassable(c, land1.up(1)) || !isSafePassable(c, land1.up(2))) return;
 
         BlockPos land2 = pos.add(3 * dx, 0, 3 * dz);
-        if (isSolid(c, land2) && isPassable(c, land2.up(1)) && isPassable(c, land2.up(2))) {
+        if (!isChunkLoaded(c, land2)) return;
+        if (isSolid(c, land2) && isSafePassable(c, land2.up(1)) && isSafePassable(c, land2.up(2))) {
             PathNode n = new PathNode(land2, PathNode.MoveType.JUMP_ACROSS);
             n.setMoveCost(4.5);
             out.add(n);
         }
     }
 
+    // ---- CLIMB (ladder/vine, up and down) ----
+    private static void tryClimb(List<PathNode> out, MinecraftClient c, BlockPos pos) {
+        // Climb up: check if the block above feet (pos.up(1) or pos.up(2)) is climbable
+        BlockPos above = pos.up(1);
+        if (isChunkLoaded(c, above) && isClimbable(c, above)) {
+            // Can climb up — find the ground block one Y above
+            BlockPos landGround = pos.up(1);
+            if (isChunkLoaded(c, landGround)) {
+                // For climbing, the node is the block we stand ON after climbing
+                // We go up 1: stand on pos.up(1) if it's solid, or keep climbing
+                // Actually: climb means moving vertically along the ladder.
+                // Node position = ground block player stands on.
+                // When climbing up, we need: climbable at feet level, and passable above.
+                // Let's scan upward for contiguous climbable blocks.
+                for (int dy = 1; dy <= 16; dy++) {
+                    BlockPos climbCheck = pos.up(dy);
+                    if (!isChunkLoaded(c, climbCheck)) break;
+
+                    // feet position after climbing dy blocks up = pos.up(dy).up(1) = pos.up(dy+1)
+                    // The climbable block should be at the feet level
+                    if (!isClimbable(c, climbCheck.up(1))) {
+                        // End of climbable column — check if we can stand here
+                        // Ground = the block below feet = climbCheck
+                        if (isSolid(c, climbCheck) && isSafePassable(c, climbCheck.up(1)) && isSafePassable(c, climbCheck.up(2))) {
+                            PathNode n = new PathNode(climbCheck, PathNode.MoveType.CLIMB);
+                            n.setMoveCost(1.0 + dy * 0.8);
+                            out.add(n);
+                        }
+                        break;
+                    }
+
+                    // Also allow getting off the ladder at any point where there's solid ground
+                    if (isSolid(c, climbCheck) && isSafePassable(c, climbCheck.up(1)) && isSafePassable(c, climbCheck.up(2))) {
+                        PathNode n = new PathNode(climbCheck, PathNode.MoveType.CLIMB);
+                        n.setMoveCost(1.0 + dy * 0.8);
+                        out.add(n);
+                    }
+                }
+            }
+        }
+
+        // Climb down: check if the block at current feet level or below is climbable
+        for (int dy = 1; dy <= 16; dy++) {
+            BlockPos below = pos.down(dy);
+            if (!isChunkLoaded(c, below)) break;
+
+            // Check climbable at the column going down
+            BlockPos climbPos = pos.down(dy - 1).up(1); // feet position as we descend
+            if (!isClimbable(c, pos.down(dy - 1).up(1)) && dy > 1) break;
+
+            if (isSolid(c, below) && isSafePassable(c, below.up(1)) && isSafePassable(c, below.up(2))) {
+                // Check the descent column has climbable blocks
+                boolean hasClimbable = false;
+                for (int check = 0; check < dy; check++) {
+                    if (isClimbable(c, pos.down(check).up(1)) || isClimbable(c, pos.down(check))) {
+                        hasClimbable = true;
+                        break;
+                    }
+                }
+                if (hasClimbable) {
+                    PathNode n = new PathNode(below, PathNode.MoveType.CLIMB);
+                    n.setMoveCost(1.0 + dy * 0.8);
+                    out.add(n);
+                }
+                break;
+            }
+        }
+    }
+
     // --------------------------------------------------------- heuristic
     private static double heuristic(BlockPos a, BlockPos b) {
-        // Octile distance — tighter admissible bound than Manhattan
         int dx = Math.abs(a.getX() - b.getX());
         int dy = Math.abs(a.getY() - b.getY());
         int dz = Math.abs(a.getZ() - b.getZ());
@@ -271,6 +328,13 @@ public class AStarPathfinder {
     }
 
     // -------------------------------------------------------- block checks
+
+    private static boolean isChunkLoaded(MinecraftClient c, BlockPos pos) {
+        if (c.world == null) return false;
+        WorldChunk chunk = c.world.getChunkManager().getWorldChunk(pos.getX() >> 4, pos.getZ() >> 4);
+        return chunk != null;
+    }
+
     private static boolean isSolid(MinecraftClient c, BlockPos pos) {
         BlockState state = c.world.getBlockState(pos);
         VoxelShape shape = state.getCollisionShape(c.world, pos);
@@ -281,6 +345,25 @@ public class AStarPathfinder {
         BlockState state = c.world.getBlockState(pos);
         VoxelShape shape = state.getCollisionShape(c.world, pos);
         return shape.isEmpty();
+    }
+
+    private static boolean isLiquid(MinecraftClient c, BlockPos pos) {
+        BlockState state = c.world.getBlockState(pos);
+        return state.getBlock() instanceof FluidBlock
+            || state.isOf(Blocks.WATER)
+            || state.isOf(Blocks.LAVA);
+    }
+
+    private static boolean isSafePassable(MinecraftClient c, BlockPos pos) {
+        if (!isChunkLoaded(c, pos)) return false;
+        return isPassable(c, pos) && !isLiquid(c, pos);
+    }
+
+    private static boolean isClimbable(MinecraftClient c, BlockPos pos) {
+        if (!isChunkLoaded(c, pos)) return false;
+        BlockState state = c.world.getBlockState(pos);
+        return state.getBlock() instanceof LadderBlock
+            || state.getBlock() instanceof VineBlock;
     }
 
     // ----------------------------------------------------- path rebuild
