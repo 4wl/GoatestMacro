@@ -6,6 +6,7 @@ import java.util.Collections;
 import java.util.List;
 
 import com.justingoat.goat.client.module.value.BooleanValue;
+import com.justingoat.goat.client.module.value.KeybindValue;
 import com.justingoat.goat.client.module.value.ModeValue;
 import com.justingoat.goat.client.module.value.ModuleValue;
 import com.justingoat.goat.client.module.value.NumberValue;
@@ -18,6 +19,8 @@ public class GoatModule {
     private final boolean canToggle;
     private final List<ModuleValue> values = new ArrayList<>();
     private boolean enabled;
+    private int keyBind = -1;
+    public transient boolean wasKeyDown;
 
     public GoatModule(String name, ModuleCategory category, boolean enabled) {
         this(name, category, enabled, true);
@@ -57,6 +60,14 @@ public class GoatModule {
         return canToggle;
     }
 
+    public int getKeyBind() {
+        return keyBind;
+    }
+
+    public void setKeyBind(int keyBind) {
+        this.keyBind = keyBind;
+    }
+
     public List<ModuleValue> getValues() {
         return Collections.unmodifiableList(values);
     }
@@ -75,6 +86,12 @@ public class GoatModule {
 
     protected ModeValue addMode(String name, String value, String... modes) {
         ModeValue moduleValue = new ModeValue(name, value, Arrays.asList(modes));
+        values.add(moduleValue);
+        return moduleValue;
+    }
+
+    protected KeybindValue addKeybind(String name, int keyCode) {
+        KeybindValue moduleValue = new KeybindValue(name, keyCode);
         values.add(moduleValue);
         return moduleValue;
     }

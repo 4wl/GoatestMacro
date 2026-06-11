@@ -1,5 +1,6 @@
 package com.justingoat.goat.client.module.pathfinder;
 
+import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.utils.InputUtils;
 import com.justingoat.goat.client.utils.RotationUtils;
 import net.minecraft.client.MinecraftClient;
@@ -46,7 +47,7 @@ public class PathProcessor {
 
     // --------------------------------------------------------------- tick
 
-    public void tick(MinecraftClient client) {
+    public void tick(MinecraftClient client, PathfinderTest settings) {
         if (isDone() || client.player == null) return;
 
         double px = client.player.getX();
@@ -69,7 +70,7 @@ public class PathProcessor {
         }
 
         // ── 1. Stuck detection (horizontal only) ────────────────────
-        if (handleStuck(client, px, pz)) return;
+        if (handleStuck(client, px, pz, settings)) return;
 
         // ── 2. Waypoint arrival with DYNAMIC radius ─────────────────
         //    Straight segments: tight 0.7-block radius.
@@ -81,12 +82,12 @@ public class PathProcessor {
         double vDistCur = Math.abs(py - curCenter.y);
 
         double reach;
+        double baseReach = settings.getWaypointReach();
         if (curNode.getMoveType() != PathNode.MoveType.WALK) {
-            reach = 1.0; // jumps/drops need proximity
+            reach = 1.0;
         } else {
             double turnAngle = getTurnAngle(currentIndex);
-            // 0° turn → reach 0.7,  90° turn → reach ~2.5,  180° → ~3.0
-            reach = 0.7 + (turnAngle / Math.PI) * 2.3;
+            reach = baseReach + (turnAngle / Math.PI) * 2.3;
         }
 
         if (hDistSqCur < reach * reach && vDistCur < 1.5) {
@@ -127,6 +128,7 @@ public class PathProcessor {
 
         // ── 4. Smooth rotation ──────────────────────────────────────
         rotation.setTarget(aimYaw, navPitch);
+        rotation.setSpeed(settings.getRotationSpeed());
 
         float[] rot = rotation.tick(client.player.getYaw(), client.player.getPitch());
         if (rot != null) {
@@ -161,7 +163,8 @@ public class PathProcessor {
         InputUtils.setJump(shouldJump);
 
         // ── 7. Sprint ───────────────────────────────────────────────
-        boolean wantSprint = (moveType == PathNode.MoveType.WALK
+        boolean wantSprint = settings.canSprint()
+            && (moveType == PathNode.MoveType.WALK
             || moveType == PathNode.MoveType.JUMP_ACROSS)
             && stuckTicks < 5 && angleToTarget < 30.0f;
         InputUtils.setSprint(wantSprint);
@@ -209,7 +212,7 @@ public class PathProcessor {
 
     // ───────────────────────────────────────── stuck detection
 
-    private boolean handleStuck(MinecraftClient client, double px, double pz) {
+    private boolean handleStuck(MinecraftClient client, double px, double pz, PathfinderTest settings) {
         if (!Double.isNaN(lastX)) {
             double hdx = px - lastX;
             double hdz = pz - lastZ;
@@ -224,7 +227,8 @@ public class PathProcessor {
 
         if (nudgeCooldown > 0) nudgeCooldown--;
 
-        if (stuckTicks >= 15 && stuckTicks < 30) {
+        int threshold = settings.getStuckThreshold();
+        if (stuckTicks >= threshold / 2 && stuckTicks < threshold) {
             if (nudgeCooldown == 0) {
                 InputUtils.setJump(true);
                 boolean left = Math.random() < 0.5;
@@ -235,12 +239,12 @@ public class PathProcessor {
             return false;
         }
 
-        if (stuckTicks == 30) {
+        if (stuckTicks == threshold && settings.canAutoRepath()) {
             BlockPos goal = path.get(path.size() - 1).getPos();
             client.player.sendMessage(
                 Text.literal("\u00a7e[Goat] Stuck \u2014 repathing..."), false);
             List<PathNode> newPath = AStarPathfinder.computePath(
-                client.player.getBlockPos().down(), goal, 100000);
+                client.player.getBlockPos().down(), goal, settings.getMaxNodes(), settings.getMaxDrop());
             if (newPath != null) {
                 setPath(newPath);
             } else {
@@ -249,7 +253,7 @@ public class PathProcessor {
             return true;
         }
 
-        if (stuckTicks >= 60) {
+        if (stuckTicks >= threshold * 2) {
             client.player.sendMessage(
                 Text.literal("\u00a7c[Goat] Repath failed. Stopping."), false);
             finish();

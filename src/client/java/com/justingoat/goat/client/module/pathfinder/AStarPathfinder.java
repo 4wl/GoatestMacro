@@ -30,7 +30,14 @@ public class AStarPathfinder {
     private static final int[][] CARDINALS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
     private static final int[][] DIAGONALS = {{1, 1}, {-1, 1}, {1, -1}, {-1, -1}};
 
+    private static int maxDropDistance = 3;
+
     public static List<PathNode> computePath(BlockPos start, BlockPos end, int maxNodes) {
+        return computePath(start, end, maxNodes, 3);
+    }
+
+    public static List<PathNode> computePath(BlockPos start, BlockPos end, int maxNodes, int maxDrop) {
+        maxDropDistance = maxDrop;
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.world == null) return null;
 
@@ -174,7 +181,7 @@ public class AStarPathfinder {
         // Entry clearance — must be able to walk into the adjacent column
         if (!isPassable(c, pos.add(dx, 1, dz)) || !isPassable(c, pos.add(dx, 2, dz))) return;
 
-        for (int drop = 1; drop <= 3; drop++) {
+        for (int drop = 1; drop <= maxDropDistance; drop++) {
             BlockPos t = pos.add(dx, -drop, dz);
             if (isSolid(c, t)) {
                 if (!isPassable(c, t.up(1)) || !isPassable(c, t.up(2))) break;
@@ -201,7 +208,7 @@ public class AStarPathfinder {
         if (!isPassable(c, pos.add(dx, 1, 0)) || !isPassable(c, pos.add(dx, 2, 0))) return;
         if (!isPassable(c, pos.add(0, 1, dz)) || !isPassable(c, pos.add(0, 2, dz))) return;
 
-        for (int drop = 1; drop <= 3; drop++) {
+        for (int drop = 1; drop <= maxDropDistance; drop++) {
             BlockPos t = pos.add(dx, -drop, dz);
             if (isSolid(c, t)) {
                 if (!isPassable(c, t.up(1)) || !isPassable(c, t.up(2))) break;

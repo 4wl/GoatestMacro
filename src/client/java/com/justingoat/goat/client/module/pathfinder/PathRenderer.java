@@ -45,7 +45,8 @@ public class PathRenderer {
 
     private static void render(WorldRenderContext context) {
         GoatModule module = ModuleManager.findByName("Pathfinder");
-        if (!(module instanceof PathfinderTest) || !module.isEnabled()) return;
+        if (!(module instanceof PathfinderTest pt) || !module.isEnabled()) return;
+        if (!pt.shouldRenderPath()) return;
 
         PathProcessor processor = ((PathfinderTest) module).getPathProcessor();
         if (processor == null || processor.isDone()) return;

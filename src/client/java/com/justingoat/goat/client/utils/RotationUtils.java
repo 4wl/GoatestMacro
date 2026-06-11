@@ -25,6 +25,7 @@ public class RotationUtils {
     private float targetYaw;
     private float targetPitch;
     private boolean active = false;
+    private float speed = 0.50f;
 
     /**
      * Update target angles. Safe to call every tick — no internal state reset.
@@ -37,6 +38,10 @@ public class RotationUtils {
 
     public boolean isActive() {
         return active;
+    }
+
+    public void setSpeed(float speed) {
+        this.speed = MathHelper.clamp(speed, 0.1f, 1.0f);
     }
 
     public void clear() {
@@ -71,11 +76,7 @@ public class RotationUtils {
             };
         }
 
-        // --- Exponential decay: cover ~50% of remaining angle per tick ---
-        // This creates natural camera-follow deceleration.
-        // The rendering engine interpolates between ticks, so each consistent
-        // fractional step produces perfectly smooth visual motion.
-        float factor = 0.50f;
+        float factor = speed;
 
         // Slight random variation ±8% — human noise without visible stutter
         factor *= 1.0f + (float) (Math.random() - 0.5) * 0.16f;

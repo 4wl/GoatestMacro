@@ -48,6 +48,20 @@ public class GoatClient implements ClientModInitializer {
             while (openGuiKeyBinding.wasPressed()) {
                 client.setScreen(new GoatMacroScreen());
             }
+            if (client.currentScreen == null) {
+                for (GoatModule module : ModuleManager.getModules()) {
+                    int key = module.getKeyBind();
+                    if (key > 0 && InputUtil.isKeyPressed(client.getWindow(), key)) {
+                        if (!module.wasKeyDown) {
+                            module.toggle();
+                            GoatConfigManager.save();
+                        }
+                        module.wasKeyDown = true;
+                    } else {
+                        module.wasKeyDown = false;
+                    }
+                }
+            }
         });
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {

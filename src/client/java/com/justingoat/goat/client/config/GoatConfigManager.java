@@ -14,6 +14,7 @@ import com.google.gson.JsonParser;
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.value.BooleanValue;
+import com.justingoat.goat.client.module.value.KeybindValue;
 import com.justingoat.goat.client.module.value.ModeValue;
 import com.justingoat.goat.client.module.value.ModuleValue;
 import com.justingoat.goat.client.module.value.NumberValue;
@@ -70,6 +71,7 @@ public final class GoatConfigManager {
         for (GoatModule module : ModuleManager.getModules()) {
             JsonObject moduleJson = new JsonObject();
             moduleJson.addProperty("enabled", module.isEnabled());
+            moduleJson.addProperty("keybind", module.getKeyBind());
 
             JsonObject values = new JsonObject();
             for (ModuleValue value : module.getValues()) {
@@ -79,6 +81,8 @@ public final class GoatConfigManager {
                     values.addProperty(value.getName(), numberValue.getValue());
                 } else if (value instanceof ModeValue modeValue) {
                     values.addProperty(value.getName(), modeValue.getValue());
+                } else if (value instanceof KeybindValue keybindValue) {
+                    values.addProperty(value.getName(), keybindValue.getKeyCode());
                 }
             }
             moduleJson.add("values", values);
@@ -106,6 +110,11 @@ public final class GoatConfigManager {
                 module.setEnabled(enabled.getAsBoolean());
             }
 
+            JsonElement keybind = moduleJson.get("keybind");
+            if (keybind != null && keybind.isJsonPrimitive() && keybind.getAsJsonPrimitive().isNumber()) {
+                module.setKeyBind(keybind.getAsInt());
+            }
+
             JsonObject values = getObject(moduleJson, "values");
             if (values != null) {
                 applyValues(module, values);
@@ -127,6 +136,8 @@ public final class GoatConfigManager {
                     numberValue.setValue(savedValue.getAsDouble());
                 } else if (value instanceof ModeValue modeValue && savedValue.getAsJsonPrimitive().isString()) {
                     modeValue.setValue(savedValue.getAsString());
+                } else if (value instanceof KeybindValue keybindValue && savedValue.getAsJsonPrimitive().isNumber()) {
+                    keybindValue.setKeyCode(savedValue.getAsInt());
                 }
             } catch (NumberFormatException exception) {
                 LOGGER.warn("Invalid value for {}.{} in Goat config.", module.getName(), value.getName());
