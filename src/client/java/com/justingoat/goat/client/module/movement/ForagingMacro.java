@@ -1,6 +1,7 @@
 package com.justingoat.goat.client.module.movement;
 
 import com.justingoat.goat.client.module.GoatModule;
+import com.justingoat.goat.client.module.MacroHudInfo;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.pathfinder.AStarPathfinder;
@@ -27,7 +28,7 @@ import net.minecraft.text.Text;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
-public class ForagingMacro extends GoatModule {
+public class ForagingMacro extends GoatModule implements MacroHudInfo {
 
     private enum MacroState {
         SCANNING,
@@ -105,6 +106,8 @@ public class ForagingMacro extends GoatModule {
     public PathProcessor getPathProcessor() { return pathProcessor; }
     public boolean shouldRenderPath() { return renderPath.getValue(); }
     public BlockPos getRenderTarget() { return targetLog != null ? targetLog : targetBase; }
+    @Override public String getHudName() { return "Foraging"; }
+    @Override public String getHudState() { return currentState.name(); }
 
     @Override
     public void setEnabled(boolean enabled) {

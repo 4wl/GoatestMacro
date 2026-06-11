@@ -2,6 +2,7 @@ package com.justingoat.goat.client;
 
 import com.justingoat.goat.client.config.GoatConfigManager;
 import com.justingoat.goat.client.gui.GoatMacroScreen;
+import com.justingoat.goat.client.gui.MacroHudRenderer;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -100,6 +101,7 @@ public class GoatClient implements ClientModInitializer {
         });
 
         PathRenderer.register();
+        MacroHudRenderer.register();
         RotationInterpolator.register();
 
         HypixelUtils.init();

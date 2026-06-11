@@ -19,6 +19,7 @@ public class GoatModule {
     private final boolean canToggle;
     private final List<ModuleValue> values = new ArrayList<>();
     private boolean enabled;
+    private long enabledAtMillis = 0;
     private int keyBind = -1;
     public transient boolean wasKeyDown;
 
@@ -49,7 +50,9 @@ public class GoatModule {
     }
 
     public void setEnabled(boolean enabled) {
+        if (this.enabled == enabled) return;
         this.enabled = enabled;
+        this.enabledAtMillis = enabled ? System.currentTimeMillis() : 0;
     }
 
     public void toggle() {
@@ -66,6 +69,10 @@ public class GoatModule {
 
     public void setKeyBind(int keyBind) {
         this.keyBind = keyBind;
+    }
+
+    public long getEnabledDurationMillis() {
+        return enabledAtMillis == 0 ? 0 : System.currentTimeMillis() - enabledAtMillis;
     }
 
     public List<ModuleValue> getValues() {

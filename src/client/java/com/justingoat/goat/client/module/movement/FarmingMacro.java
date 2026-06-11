@@ -1,6 +1,7 @@
 package com.justingoat.goat.client.module.movement;
 
 import com.justingoat.goat.client.module.GoatModule;
+import com.justingoat.goat.client.module.MacroHudInfo;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.NumberValue;
@@ -13,7 +14,7 @@ import net.minecraft.util.math.MathHelper;
 
 import java.util.Random;
 
-public class FarmingMacro extends GoatModule {
+public class FarmingMacro extends GoatModule implements MacroHudInfo {
     private final BooleanValue holdAttack;
     private final NumberValue delayMin;
     private final NumberValue delayMax;
@@ -100,6 +101,16 @@ public class FarmingMacro extends GoatModule {
                 tickDropping(client);
                 break;
         }
+    }
+
+    @Override
+    public String getHudName() {
+        return "Farming";
+    }
+
+    @Override
+    public String getHudState() {
+        return currentState.name();
     }
 
     private void tickWaiting() {
