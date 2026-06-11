@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import com.justingoat.goat.client.module.combat.CombatMacro;
 import com.justingoat.goat.client.module.movement.AutoSprint;
 import com.justingoat.goat.client.module.movement.FarmingMacro;
 import com.justingoat.goat.client.module.movement.ForagingMacro;
@@ -27,6 +28,7 @@ public final class ModuleManager {
     }
 
     private static void registerCombatModules() {
+        register(new CombatMacro());
         register(module("KillAura", ModuleCategory.COMBAT, false)
             .number("Range", 3.2, 3.0, 6.0)
             .mode("Priority", "Health", "Health", "Distance")
