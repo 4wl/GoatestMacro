@@ -5,9 +5,10 @@ import java.util.Collections;
 import java.util.List;
 
 import com.justingoat.goat.client.module.movement.AutoSprint;
+import com.justingoat.goat.client.module.movement.FarmingMacro;
+import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.module.render.CustomFOV;
 import com.justingoat.goat.client.module.render.FullBright;
-
 import com.justingoat.goat.client.module.render.TimeChanger;
 import net.minecraft.client.MinecraftClient;
 
@@ -44,6 +45,8 @@ public final class ModuleManager {
             .mode("Mode", "Hypixel", "Hypixel", "Vanilla")
             .number("Speed", 1.2, 0.1, 3.0)
             .build());
+        register(new FarmingMacro());
+        register(new PathfinderTest());
     }
 
     private static void registerRenderModules() {

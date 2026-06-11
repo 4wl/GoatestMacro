@@ -15,7 +15,7 @@ public final class TimeChanger extends GoatModule {
 
     @Override
     public void tick(MinecraftClient client){
-        if (!isEnabled()) {
+        if (!isEnabled() || client.world == null) {
             return;
         }
         if (mode.getValue().equals("Day")){

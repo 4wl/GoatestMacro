@@ -1,4 +1,4 @@
-﻿# Goat 開發規格
+# Goat 開發規格
 
 ## 目的
 
@@ -14,7 +14,7 @@ Goat 是一個 Minecraft 1.21.11 的 Fabric 模組。這份文件用來讓開發
 
 ## 目前開發進度紀錄
 
-紀錄日期：2026-06-09
+紀錄日期：2026-06-10
 
 目前已完成：
 
@@ -25,6 +25,10 @@ Goat 是一個 Minecraft 1.21.11 的 Fabric 模組。這份文件用來讓開發
 - `FullBright` 已實作為 Render module。
 - `CustomFOV` 已實作為 Render module。
 - `ModuleManager` 已依分類整理註冊流程。
+- Goat client config 系統已建立，module 開關與設定值會保存到檔案。
+- **FarmingMacro** 實作了無干涉按鍵綁定 (KeyBinding) 模擬。
+- **Failsafe Manager** 建立了模組化的防查緝系統，具備視角與維度變更的監聽能力。
+- **A* Pathfinder** 引擎完成，支援 1.21.11 `VoxelShape`，具備平滑轉向、卡死重算、以及粒子 ESP 路徑視覺化。
 
 目前主要程式結構：
 
@@ -49,7 +53,6 @@ src/client/java/com/justingoat/goat/client/module
 
 尚未完成或尚未確認：
 
-- 尚未實作設定保存到檔案。
 - 尚未做完整遊戲內手動測試。
 - 部分 GUI 中顯示的 module 仍是展示用 placeholder，尚未有實際遊戲功能。
 
@@ -164,6 +167,7 @@ Right Shift
 - NoSlow
 - Speed
 - AntiBot
+- FarmingMacro
 
 這些模組目前主要用來展示 GUI 的互動與版面，不代表所有遊戲內功能都已實作完成。
 
@@ -220,6 +224,39 @@ src/client/java/com/justingoat/goat/client/module
 5. 到 `ModuleManager` 註冊 module。
 
 GUI 不應該為單一功能手寫同步邏輯。GUI 應直接讀取與修改 module 本身的開關與設定值，讓功能邏輯和畫面使用同一份狀態。
+
+### Config 系統
+
+Goat client 會把 module 的開關狀態與設定值保存到本機設定檔。
+
+設定檔位置：
+
+```text
+config/goat/client.json
+```
+
+目前會保存：
+
+- module 是否開啟。
+- 布林值設定。
+- 數值設定。
+- 模式設定。
+
+當 Minecraft 啟動並載入 Goat client 時，會自動讀取設定檔。如果設定檔不存在，會用目前預設值建立一份新的設定檔。
+
+當玩家在 Goat GUI 中修改 module 開關或設定值時，會自動保存設定。關閉 client 時也會再保存一次。
+
+如果設定檔中有未知 module、未知設定值，或 mode 值不在允許選項內，Goat 會忽略該項目並保留目前預設值。
+
+測試方式：
+
+1. 啟動遊戲。
+2. 按 Right Shift 開啟 Goat GUI。
+3. 修改任一 module 開關或設定值，例如關閉 Sprint、調整 CustomFOV 的 FOV、切換 Sprint 模式。
+4. 關閉遊戲。
+5. 再次啟動遊戲並開啟 Goat GUI。
+6. 剛才修改的設定應維持不變。
+7. 檢查 `config/goat/client.json`，應能看到對應 module 與設定值。
 
 ### FullBright
 
@@ -278,6 +315,74 @@ CustomFOV
 5. 調整 FOV 設定。
 6. 關閉 GUI 後，畫面視野應套用指定 FOV。
 7. 關閉 CustomFOV 後，FOV 應回到開啟前的狀態。
+
+### Farming Macro
+
+玩家可以在 Goat GUI 的 Movement 分類中開啟或關閉：
+
+```text
+FarmingMacro
+```
+
+當 FarmingMacro 開啟時，會自動在農田內進行蛇行路徑收成（按住 D 撞牆換 W，撞牆換 A，撞牆換 W...以此類推），並自動按住攻擊鍵。
+這個功能基於 `KeyBinding` 模擬實作，確保產生的物理與封包狀態與真實玩家完全一致，藉此規避 Hypixel Watchdog 等 Anti-Cheat 偵測。
+
+目前設定：
+
+- Hold Attack：是否在移動時持續按住左鍵。預設為開啟。
+- Delay Min (ms)：撞牆換向時的最小隨機延遲。
+- Delay Max (ms)：撞牆換向時的最大隨機延遲。
+
+限制條件：
+
+- 開啟聊天欄、背包或 Goat GUI 等畫面時會暫停巨集。
+- 關閉 FarmingMacro 後，會自動釋放所有受控的按鍵。
+
+測試方式：
+
+1. 進入世界，建立一條農場軌道，並在轉角處放置方塊作為撞牆依據。
+2. 開啟 Goat GUI，切換到 Movement 分類。
+3. 開啟 FarmingMacro。
+4. 觀察角色是否自動向右 (D) 移動並按住左鍵。
+5. 角色撞牆後，應自動短暫向前方 (W) 移動，撞牆後再向左 (A) 移動。
+6. 關閉 FarmingMacro，角色應立刻停止所有按鍵動作。
+
+### Failsafe Manager (反查緝系統)
+
+Goat 內建了模組化的 Failsafe 系統，專門用來在自動化過程中保護玩家帳號不被伺服器查緝（特別是 Hypixel Watchdog）。
+
+目前已實作的防禦模組：
+
+1. **Rotation Check**：如果在單一 tick 內，玩家的視角發生超過 45 度的非自然劇烈轉動（代表被管理員強行改變視角測試），系統會觸發警報。
+2. **World Change**：如果玩家身處的維度或伺服器被強制改變（代表被管理員拉進審查房間或踢出），系統會觸發警報。
+
+限制條件與行為：
+
+- Failsafe 系統會在背景持續監控。
+- 當任何 Failsafe 觸發時，會產生「Emergency（緊急事件）」。
+- 如果 FarmingMacro 正在運行且偵測到 Emergency，會**立刻強制關閉**並釋放所有移動與攻擊按鍵，避免造成後續的不正常行為證據。
+- Emergency 佇列會依照威脅等級（Priority）處理事件。
+
+測試方式：
+
+1. 開啟 FarmingMacro。
+2. 透過其他方式（例如伺服器指令、傳送門）強制改變自己的維度或世界。
+3. FarmingMacro 應該會立刻停止所有動作，控制權交還玩家。
+
+### A* Pathfinder Engine (尋路引擎)
+
+Goat 內建了自製的 A* 尋路引擎，針對 1.21.11 的 `VoxelShape` 碰撞箱進行了適配，能繞過障礙物與深坑。
+
+主要功能與元件：
+- `AStarPathfinder`: 處理 3D 空間的節點運算。支援水平移動、爬階梯 (Y+1)、安全掉落 (Y-1, Y-2)，並具備「終點懸空自動對齊實體地板」的容錯機制。
+- `PathProcessor`: 消化路徑座標，自動接管玩家的前進與跳躍按鍵。
+- **平滑轉向 (Smooth Rotation)**: 透過在 `END_CLIENT_TICK` 中更新 `yaw` 與 `pitch`，完全保留 Minecraft 渲染引擎的補間動畫 (Interpolation)，達成極度平滑的模擬轉向效果。
+- **卡死重算 (Stuck Detection)**: 持續監控實體位置，若超過 2 秒鐘未產生實質位移 (卡點)，將自動觸發重新尋路，動態繞開臨時障礙物 (例如其他實體或新放的方塊)。
+- **路徑視覺化 (Particle ESP)**: 為了規避反作弊的 Render Hook 掃描與克服版號斷層，使用原版原生的粒子系統 (`client.world.addParticle`)，以 `HAPPY_VILLAGER` (綠色星星) 標示節點方塊、以 `END_ROD` (發光點) 畫出路線軌跡。
+
+目前提供一個測試用模組 `PathfinderTest` 與指令：
+- 指令 `/goto X Y Z` 可以讓玩家直接測試任何地點的尋路。
+- 尋路過程中會自動控制移動。走到目的地後會自動關閉並釋放按鍵。
 
 ### 自訂 GUI 字體
 

@@ -3,6 +3,7 @@ package com.justingoat.goat.client.gui;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.justingoat.goat.client.config.GoatConfigManager;
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.ModuleManager;
@@ -48,6 +49,7 @@ public class GoatMacroScreen extends Screen {
     private int resizeX;
     private int resizeY;
     private NumberValue draggingSlider;
+    private Double sliderValueBeforeDrag;
     private ModeValue expandedMode;
     private CustomFontRenderer fontRenderer;
 
@@ -138,7 +140,11 @@ public class GoatMacroScreen extends Screen {
     public boolean mouseReleased(Click click) {
         dragging = false;
         resizing = false;
+        if (draggingSlider != null && sliderValueBeforeDrag != null && draggingSlider.getValue() != sliderValueBeforeDrag) {
+            GoatConfigManager.save();
+        }
         draggingSlider = null;
+        sliderValueBeforeDrag = null;
         return super.mouseReleased(click);
     }
 
@@ -252,6 +258,7 @@ public class GoatMacroScreen extends Screen {
                 if (isInside(mouseX, mouseY, windowX + leftWidth() + 8, y, windowWidth - leftWidth() - 16, 30)) {
                     if (button == 0 && module.canToggle()) {
                         module.toggle();
+                        GoatConfigManager.save();
                     } else if (button == 1 && !module.getValues().isEmpty()) {
                         selectedModule = module;
                         valueScroll = 0;
@@ -276,10 +283,12 @@ public class GoatMacroScreen extends Screen {
         for (ModuleValue value : selectedModule.getValues()) {
             if (value instanceof BooleanValue booleanValue && isInside(mouseX, mouseY, windowX + leftWidth() + 10, y - 2, windowWidth - leftWidth() - 40, 16)) {
                 booleanValue.toggle();
+                GoatConfigManager.save();
                 return true;
             }
             if (value instanceof NumberValue numberValue && isInside(mouseX, mouseY, windowX + windowWidth - 110, y, 80, 12)) {
                 draggingSlider = numberValue;
+                sliderValueBeforeDrag = numberValue.getValue();
                 updateNumberValue(numberValue, mouseX);
                 return true;
             }
@@ -293,6 +302,7 @@ public class GoatMacroScreen extends Screen {
                     if (!mode.equals(modeValue.getValue()) && isInside(mouseX, mouseY, windowX + windowWidth - 110, optionY, 80, 15)) {
                         modeValue.setValue(mode);
                         expandedMode = null;
+                        GoatConfigManager.save();
                         return true;
                     }
                     optionY += mode.equals(modeValue.getValue()) ? 0 : 15;
