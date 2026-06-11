@@ -19,6 +19,9 @@ import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.module.pathfinder.PathRenderer;
 import com.justingoat.goat.client.utils.RotationInterpolator;
+import com.justingoat.goat.client.utils.HypixelUtils;
+import com.justingoat.goat.client.utils.SkyBlockUtils;
+import com.justingoat.goat.client.events.EventManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.lwjgl.glfw.GLFW;
@@ -98,6 +101,9 @@ public class GoatClient implements ClientModInitializer {
 
         PathRenderer.register();
         RotationInterpolator.register();
+
+        HypixelUtils.init();
+        EventManager.INSTANCE.registerEvents(new SkyBlockUtils());
 
         LOGGER.info("Goat client initialized.");
     }

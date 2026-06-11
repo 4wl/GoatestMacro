@@ -93,7 +93,7 @@ public class PathProcessor {
             double fdx = px - (lp.getX() + 0.5);
             double fdz = pz - (lp.getZ() + 0.5);
             double fdy = Math.abs(py - (lp.getY() + 1.0));
-            if (fdx * fdx + fdz * fdz < 1.0 && fdy < 1.5) {
+            if (fdx * fdx + fdz * fdz < 0.16 && fdy < 0.75) {
                 finish(client);
                 return;
             }
@@ -111,7 +111,9 @@ public class PathProcessor {
         double reach;
         double baseReach = settings.getWaypointReach();
         PathNode.MoveType curMoveType = curNode.getMoveType();
-        if (curMoveType != PathNode.MoveType.WALK) {
+        if (currentIndex == path.size() - 1) {
+            reach = 0.35;
+        } else if (curMoveType != PathNode.MoveType.WALK) {
             reach = 1.0;
         } else {
             double turnAngle = getTurnAngle(currentIndex);

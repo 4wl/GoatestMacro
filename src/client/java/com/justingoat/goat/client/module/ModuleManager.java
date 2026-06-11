@@ -6,6 +6,7 @@ import java.util.List;
 
 import com.justingoat.goat.client.module.movement.AutoSprint;
 import com.justingoat.goat.client.module.movement.FarmingMacro;
+import com.justingoat.goat.client.module.movement.ForagingMacro;
 import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.module.render.CustomFOV;
 import com.justingoat.goat.client.module.render.FullBright;
@@ -46,6 +47,7 @@ public final class ModuleManager {
             .number("Speed", 1.2, 0.1, 3.0)
             .build());
         register(new FarmingMacro());
+        register(new ForagingMacro());
         register(new PathfinderTest());
     }
 

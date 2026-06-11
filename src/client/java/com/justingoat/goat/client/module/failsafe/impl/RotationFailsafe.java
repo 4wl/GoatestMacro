@@ -1,5 +1,7 @@
 package com.justingoat.goat.client.module.failsafe.impl;
 
+import com.justingoat.goat.client.module.GoatModule;
+import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.failsafe.Failsafe;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 
@@ -22,6 +24,13 @@ public class RotationFailsafe extends Failsafe {
     public void onTick() {
         if (client.player == null) {
             initialized = false;
+            return;
+        }
+
+        if (isMacroControllingRotation()) {
+            lastYaw = client.player.getYaw();
+            lastPitch = client.player.getPitch();
+            initialized = true;
             return;
         }
 
@@ -50,5 +59,13 @@ public class RotationFailsafe extends Failsafe {
     @Override
     public void reset() {
         initialized = false;
+    }
+
+    private boolean isMacroControllingRotation() {
+        GoatModule foraging = ModuleManager.findByName("ForagingMacro");
+        if (foraging != null && foraging.isEnabled()) return true;
+
+        GoatModule pathfinder = ModuleManager.findByName("Pathfinder");
+        return pathfinder != null && pathfinder.isEnabled();
     }
 }
