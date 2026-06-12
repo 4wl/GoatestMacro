@@ -21,7 +21,6 @@ import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
 
 public class GoatMacroScreen extends Screen {
-    private static final int OVERLAY = 0x80101010;
     private static final int BG = 0xFF15111D;
     private static final int SIDEBAR_BG = 0xFF15111D;
     private static final int BORDER = 0xFF2A2239;
@@ -65,6 +64,7 @@ public class GoatMacroScreen extends Screen {
     private boolean listeningModuleKeybind;
     private GoatModule listeningModule;
     private CustomFontRenderer fontRenderer;
+    private GoatGuiRenderer renderer;
 
     public GoatMacroScreen() {
         super(Text.literal("Goat"));
@@ -84,12 +84,11 @@ public class GoatMacroScreen extends Screen {
 
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-        context.fill(0, 0, width, height, OVERLAY);
-
         if (draggingSlider != null) {
             updateNumberValue(draggingSlider, mouseX);
         }
 
+        renderer = new GoatGuiRenderer(context, fontRenderer);
         drawBackground(context);
         drawHeader(context);
         drawSidebar(context, mouseX, mouseY);
@@ -208,9 +207,9 @@ public class GoatMacroScreen extends Screen {
 
     private void drawHeader(DrawContext context) {
         rounded(context, windowX, windowY, BASE_WIDTH, HEADER_HEIGHT, HEADER_BG);
-        context.fill(windowX, windowY + HEADER_HEIGHT - 1, windowX + BASE_WIDTH, windowY + HEADER_HEIGHT, HEADER_BORDER);
+        fill(context, windowX, windowY + HEADER_HEIGHT - 1, windowX + BASE_WIDTH, windowY + HEADER_HEIGHT, HEADER_BORDER);
 
-        fontRenderer.drawText(context, "Goat", windowX + 14, windowY + 14, ACCENT);
+        fontRenderer.drawMediumText(context, "Goat", windowX + 14, windowY + 14, ACCENT);
         fontRenderer.drawText(context, "v1.0", windowX + 46, windowY + 14, TEXT_SECONDARY);
     }
 
@@ -225,21 +224,25 @@ public class GoatMacroScreen extends Screen {
 
             if (selected) {
                 rounded(context, sx + 8, categoryY, SIDEBAR_WIDTH - 16, 24, CATEGORY_BG_START);
-                context.fill(sx + 8, categoryY, sx + 10, categoryY + 24, ACCENT);
+                fill(context, sx + 8, categoryY, sx + 10, categoryY + 24, ACCENT);
             } else if (hover) {
                 rounded(context, sx + 8, categoryY, SIDEBAR_WIDTH - 16, 24, 0xFF1E1830);
             }
 
             int textColor = selected ? ACCENT : (hover ? TEXT_PRIMARY : TEXT_SECONDARY);
             fontRenderer.drawText(context, category.getIcon(), sx + 16, categoryY + 9, textColor);
-            fontRenderer.drawText(context, category.getLabel(), sx + 28, categoryY + 9, textColor);
+            if (selected) {
+                fontRenderer.drawMediumText(context, category.getLabel(), sx + 28, categoryY + 9, textColor);
+            } else {
+                fontRenderer.drawText(context, category.getLabel(), sx + 28, categoryY + 9, textColor);
+            }
             categoryY += 30;
         }
     }
 
     private void drawSeparators(DrawContext context) {
         int sx = windowX + SIDEBAR_WIDTH;
-        context.fill(sx, windowY + HEADER_HEIGHT, sx + 1, windowY + BASE_HEIGHT, SEPARATOR);
+        fill(context, sx, windowY + HEADER_HEIGHT, sx + 1, windowY + BASE_HEIGHT, SEPARATOR);
     }
 
     private void drawModuleList(DrawContext context, int mouseX, int mouseY) {
@@ -262,7 +265,11 @@ public class GoatMacroScreen extends Screen {
                 rounded(context, mx, y, mw, 40, hover ? 0xFF1A1526 : MODULE_BG);
                 drawBorder(context, mx, y, mw, 40, MODULE_BORDER);
 
-                fontRenderer.drawText(context, module.getName(), mx + 10, y + 12, module.isEnabled() ? TEXT_PRIMARY : TEXT_SECONDARY);
+                if (module.isEnabled()) {
+                    fontRenderer.drawMediumText(context, module.getName(), mx + 10, y + 12, TEXT_PRIMARY);
+                } else {
+                    fontRenderer.drawText(context, module.getName(), mx + 10, y + 12, TEXT_SECONDARY);
+                }
 
                 String keyName = getModuleKeyName(module);
                 int knX = mx + mw - 52 - fontRenderer.getWidth(keyName);
@@ -288,8 +295,8 @@ public class GoatMacroScreen extends Screen {
         int contentY = windowY + HEADER_HEIGHT;
         int contentH = BASE_HEIGHT - HEADER_HEIGHT;
 
-        fontRenderer.drawText(context, "< " + selectedModule.getName(), contentX + 12, contentY + 12, TEXT_PRIMARY);
-        context.fill(contentX + 8, contentY + 24, contentX + contentW - 8, contentY + 25, SEPARATOR);
+        fontRenderer.drawMediumText(context, "< " + selectedModule.getName(), contentX + 12, contentY + 12, TEXT_PRIMARY);
+        fill(context, contentX + 8, contentY + 24, contentX + contentW - 8, contentY + 25, SEPARATOR);
 
         enableScissor(context, contentX, contentY + 26, contentW, contentH - 26);
 
@@ -302,7 +309,7 @@ public class GoatMacroScreen extends Screen {
         rounded(context, kbX, y, 70, 16, isListeningMod ? KEYBIND_LISTENING : KEYBIND_BG);
         fontRenderer.drawText(context, isListeningMod ? "Press a key..." : keyName, kbX + 6, y + 4, isListeningMod ? 0xFFFFFFFF : TEXT_SECONDARY);
         y += 24;
-        context.fill(contentX + 14, y - 4, contentX + contentW - 14, y - 3, SEPARATOR);
+        fill(context, contentX + 14, y - 4, contentX + contentW - 14, y - 3, SEPARATOR);
 
         for (ModuleValue value : selectedModule.getValues()) {
             if (y > contentY - 30 && y < contentY + contentH + 30) {
@@ -321,7 +328,7 @@ public class GoatMacroScreen extends Screen {
                     drawKeybindButton(context, keybindValue, contentX + contentW - 90, y);
                 }
 
-                context.fill(contentX + 14, y + 20, contentX + contentW - 14, y + 21, SEPARATOR);
+                fill(context, contentX + 14, y + 20, contentX + contentW - 14, y + 21, SEPARATOR);
             }
             y += 22;
         }
@@ -332,15 +339,15 @@ public class GoatMacroScreen extends Screen {
     private void drawSwitch(DrawContext context, int x, int y, boolean enabled) {
         rounded(context, x, y, 26, 12, enabled ? SWITCH_ON_TRACK : SWITCH_OFF_TRACK);
         int knobX = enabled ? x + 16 : x + 2;
-        context.fill(knobX, y + 2, knobX + 8, y + 10, enabled ? SWITCH_ON_THUMB : SWITCH_OFF_THUMB);
+        fill(context, knobX, y + 2, knobX + 8, y + 10, enabled ? SWITCH_ON_THUMB : SWITCH_OFF_THUMB);
     }
 
     private void drawSlider(DrawContext context, NumberValue value, int x, int y) {
-        context.fill(x, y + 6, x + 80, y + 10, SLIDER_TRACK);
+        fill(context, x, y + 6, x + 80, y + 10, SLIDER_TRACK);
         double pct = (value.getValue() - value.getMin()) / (value.getMax() - value.getMin());
         int fill = (int) Math.round(pct * 74.0);
-        context.fill(x, y + 6, x + 6 + fill, y + 10, ACCENT);
-        context.fill(x + fill, y + 3, x + fill + 6, y + 13, SLIDER_KNOB);
+        fill(context, x, y + 6, x + 6 + fill, y + 10, ACCENT);
+        fill(context, x + fill, y + 3, x + fill + 6, y + 13, SLIDER_KNOB);
 
         String label = value.getValue() == Math.rint(value.getValue())
             ? Integer.toString((int) value.getValue())
@@ -530,29 +537,23 @@ public class GoatMacroScreen extends Screen {
     }
 
     private void rounded(DrawContext context, int x, int y, int w, int h, int color) {
-        context.fill(x + 2, y, x + w - 2, y + h, color);
-        context.fill(x, y + 2, x + w, y + h - 2, color);
-        context.fill(x + 1, y + 1, x + w - 1, y + 2, color);
-        context.fill(x + 1, y + h - 2, x + w - 1, y + h - 1, color);
+        renderer.rounded(x, y, w, h, color);
     }
 
     private void drawBorder(DrawContext context, int x, int y, int w, int h, int color) {
-        context.fill(x + 2, y, x + w - 2, y + 1, color);
-        context.fill(x + 2, y + h - 1, x + w - 2, y + h, color);
-        context.fill(x, y + 2, x + 1, y + h - 2, color);
-        context.fill(x + w - 1, y + 2, x + w, y + h - 2, color);
-        context.fill(x + 1, y + 1, x + 2, y + 2, color);
-        context.fill(x + w - 2, y + 1, x + w - 1, y + 2, color);
-        context.fill(x + 1, y + h - 2, x + 2, y + h - 1, color);
-        context.fill(x + w - 2, y + h - 2, x + w - 1, y + h - 1, color);
+        renderer.border(x, y, w, h, color);
+    }
+
+    private void fill(DrawContext context, int x1, int y1, int x2, int y2, int color) {
+        renderer.fill(x1, y1, x2, y2, color);
     }
 
     private void enableScissor(DrawContext context, int x, int y, int w, int h) {
-        context.enableScissor(x, y, x + w, y + h);
+        renderer.enableScissor(x, y, w, h);
     }
 
     private void disableScissor(DrawContext context) {
-        context.disableScissor();
+        renderer.disableScissor();
     }
 
     private boolean isInside(double mouseX, double mouseY, int x, int y, int w, int h) {

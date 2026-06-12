@@ -1,6 +1,8 @@
-Place the custom GUI font at:
+The Goat GUI now loads Rubik font weights from:
 
-assets/goat/font/gui.ttf
+assets/goat/fonts/Rubik-Regular.ttf
+assets/goat/fonts/Rubik-Medium.ttf
+assets/goat/fonts/Rubik-Bold.ttf
 
-Any TrueType font with this exact file name will be used by the Goat GUI.
-If the file is missing or invalid, the GUI falls back to the system SansSerif font.
+These files mirror the resource-based font setup used by korefabricold.
+If a file is missing or invalid, the GUI falls back to the system SansSerif font.
