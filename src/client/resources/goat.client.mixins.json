@@ -4,7 +4,8 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "PlayerListHudAccessor",
-    "MouseAccessor"
+    "MouseAccessor",
+    "ClientPlayNetworkHandlerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

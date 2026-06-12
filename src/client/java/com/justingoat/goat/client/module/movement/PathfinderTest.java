@@ -8,6 +8,7 @@ import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.pathfinder.AStarPathfinder;
 import com.justingoat.goat.client.module.pathfinder.PathNode;
 import com.justingoat.goat.client.module.pathfinder.PathProcessor;
+import com.justingoat.goat.client.module.pathfinder.PathSmoother;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.NumberValue;
 import com.justingoat.goat.client.utils.InputUtils;
@@ -77,9 +78,10 @@ public class PathfinderTest extends GoatModule {
         int nodes = getMaxNodes();
         int drop = getMaxDrop();
 
-        CompletableFuture.supplyAsync(() ->
-            AStarPathfinder.computePath(start, target, nodes, drop)
-        ).thenAccept(path -> client.execute(() -> {
+        CompletableFuture.supplyAsync(() -> {
+            List<PathNode> raw = AStarPathfinder.computePath(start, target, nodes, drop);
+            return raw != null ? PathSmoother.smooth(raw) : null;
+        }).thenAccept(path -> client.execute(() -> {
             computing = false;
             if (path != null) {
                 client.player.sendMessage(

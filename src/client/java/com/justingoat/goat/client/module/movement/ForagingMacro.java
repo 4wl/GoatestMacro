@@ -5,7 +5,9 @@ import com.justingoat.goat.client.module.MacroHudInfo;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.pathfinder.AStarPathfinder;
+import com.justingoat.goat.client.module.pathfinder.PathNode;
 import com.justingoat.goat.client.module.pathfinder.PathProcessor;
+import com.justingoat.goat.client.module.pathfinder.PathSmoother;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.ModeValue;
 import com.justingoat.goat.client.module.value.NumberValue;
@@ -231,9 +233,10 @@ public class ForagingMacro extends GoatModule implements MacroHudInfo {
         client.player.sendMessage(
             Text.literal("\u00A77[Goat] Pathing to " + logType.getValue() + " tree at " + targetBase.toShortString() + "..."), false);
 
-        CompletableFuture.supplyAsync(() ->
-            AStarPathfinder.computePath(start, goal, 100000, 3)
-        ).thenAccept(path -> client.execute(() -> {
+        CompletableFuture.supplyAsync(() -> {
+            java.util.List<PathNode> raw = AStarPathfinder.computePath(start, goal, 100000, 3);
+            return raw != null ? PathSmoother.smooth(raw) : null;
+        }).thenAccept(path -> client.execute(() -> {
             computing = false;
             if (!isEnabled()) return;
             if (path != null) {

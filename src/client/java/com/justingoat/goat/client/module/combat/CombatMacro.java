@@ -5,6 +5,7 @@ import com.justingoat.goat.client.module.MacroHudInfo;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.module.pathfinder.AStarPathfinder;
+import com.justingoat.goat.client.module.pathfinder.PathSmoother;
 import com.justingoat.goat.client.module.pathfinder.PathNode;
 import com.justingoat.goat.client.module.pathfinder.PathProcessor;
 import com.justingoat.goat.client.module.value.BooleanValue;
@@ -197,6 +198,14 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     // ═══════════════════════════════════════════════════ SEARCHING
 
     private void tickSearching(MinecraftClient client) {
+        // Release rotation control when not tracking a target
+        if (rotation.isActive()) {
+            client.player.setYaw(rotation.getCurrentYaw());
+            client.player.setPitch(rotation.getCurrentPitch());
+            rotation.clear();
+            RotationInterpolator.clearActive();
+        }
+
         // Anti-player check before scanning
         if (antiPlayer.getValue() && checkPlayerThreat(client)) {
             enterWaiting();
@@ -266,24 +275,31 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
             return;
         }
 
-        // If A* path is active, follow it but abort once close enough
+        double closeRange = attackRange.getValue() + 3.0;
+
+        // If A* path is active, follow it until close enough for direct strafe
         if (pathProcessor.getPath() != null && !pathProcessor.isDone()) {
-            if (dist <= attackRange.getValue() + 3.0) {
+            if (dist <= closeRange) {
                 pathProcessor.stop();
                 directStrafeStuckTicks = 0;
                 tickDirectStrafe(client, dist);
             } else {
                 tickFarPursuit(client);
             }
-        } else {
-            // Default: always direct strafe toward mob
-            // Only fall back to A* if stuck for too long (real obstacle)
-            if (directStrafeStuckTicks >= STRAFE_STUCK_PATHFIND_THRESHOLD && dist > attackRange.getValue() + 3.0) {
+        } else if (dist <= closeRange) {
+            // Close enough: direct strafe toward mob
+            if (directStrafeStuckTicks >= STRAFE_STUCK_PATHFIND_THRESHOLD) {
                 directStrafeStuckTicks = 0;
                 requestRepath(client, currentTarget.getBlockPos().down());
             } else {
                 tickDirectStrafe(client, dist);
             }
+        } else {
+            // Far away with no path: request A* instead of walking blindly
+            if (!pathing) {
+                requestRepath(client, currentTarget.getBlockPos().down());
+            }
+            InputUtils.releaseAll();
         }
     }
 
@@ -751,8 +767,8 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     private void initRotationForTarget(MinecraftClient client) {
         if (!rotation.isActive()) {
             rotation.init(client.player.getYaw(), client.player.getPitch());
-            RotationInterpolator.setActive(rotation);
         }
+        RotationInterpolator.setActive(rotation);
     }
 
     /**
@@ -774,9 +790,11 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
         pathing = true;
 
         BlockPos start = client.player.getBlockPos().down();
-        CompletableFuture.supplyAsync(() ->
-                AStarPathfinder.computePath(start, target, 50000, 3)
-        ).thenAccept(newPath -> client.execute(() -> {
+        CompletableFuture.supplyAsync(() -> {
+            java.util.List<com.justingoat.goat.client.module.pathfinder.PathNode> raw =
+                AStarPathfinder.computePath(start, target, 50000, 3);
+            return raw != null ? PathSmoother.smooth(raw) : null;
+        }).thenAccept(newPath -> client.execute(() -> {
             pathing = false;
             if (newPath != null && !newPath.isEmpty()) {
                 pathProcessor.setPath(newPath);

@@ -4,6 +4,9 @@ import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.utils.InputUtils;
 import com.justingoat.goat.client.utils.RotationInterpolator;
 import com.justingoat.goat.client.utils.RotationUtils;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.FluidBlock;
+import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
@@ -27,6 +30,12 @@ public class PathProcessor {
     private int nudgeCooldown = 0;
     private int activeTicks = 0;
 
+    // V5-inspired multi-stage recovery
+    private static final int STUCK_JUMP_TICKS = 10;
+    private static final int STUCK_BACKUP_TICKS = 22;
+    private static final int STUCK_REPATH_TICKS = 44;
+    private int backupTicks = 0;
+
     // Async repath state
     private volatile boolean repathing = false;
 
@@ -40,6 +49,7 @@ public class PathProcessor {
         this.stuckTicks = 0;
         this.nudgeCooldown = 0;
         this.activeTicks = 0;
+        this.backupTicks = 0;
         this.repathing = false;
         this.rotation.clear();
         RotationInterpolator.setActive(rotation);
@@ -193,6 +203,8 @@ public class PathProcessor {
             shouldJump = true;
         } else if (isJumpableObstacle(client)) {
             shouldJump = true;
+        } else if (isInFluid(client)) {
+            shouldJump = true;
         }
         InputUtils.setJump(shouldJump);
 
@@ -267,6 +279,17 @@ public class PathProcessor {
         return feetBlocked && bodyFree && headFree;
     }
 
+    // ───────────────────────────────────────── fluid jump (V5)
+
+    private boolean isInFluid(MinecraftClient client) {
+        if (client.world == null || client.player == null) return false;
+        BlockPos feet = client.player.getBlockPos();
+        BlockState feetState = client.world.getBlockState(feet);
+        return feetState.getBlock() instanceof FluidBlock
+            || feetState.isOf(Blocks.WATER)
+            || feetState.isOf(Blocks.LAVA);
+    }
+
     // ───────────────────────────────────── early jump lookahead
 
     private boolean needsEarlyJump(MinecraftClient client, double px, double py, double pz) {
@@ -285,9 +308,23 @@ public class PathProcessor {
         return false;
     }
 
-    // ───────────────────────────────────────── stuck detection
+    // ───────────────────────────── V5-inspired multi-stage recovery
 
     private boolean handleStuck(MinecraftClient client, double px, double pz, PathfinderTest settings) {
+        // Handle active backup movement
+        if (backupTicks > 0) {
+            backupTicks--;
+            InputUtils.setForward(false);
+            InputUtils.setBack(true);
+            InputUtils.setJump(false);
+            InputUtils.setSprint(false);
+            if (backupTicks == 0) {
+                InputUtils.setBack(false);
+                triggerRepath(client, settings);
+            }
+            return true;
+        }
+
         if (!Double.isNaN(lastX)) {
             double hdx = px - lastX;
             double hdz = pz - lastZ;
@@ -302,8 +339,8 @@ public class PathProcessor {
 
         if (nudgeCooldown > 0) nudgeCooldown--;
 
-        int threshold = settings.getStuckThreshold();
-        if (stuckTicks >= threshold / 2 && stuckTicks < threshold) {
+        // Stage 1: Try jumping (V5: STUCK_TICKS_JUMP = 10)
+        if (stuckTicks >= STUCK_JUMP_TICKS && stuckTicks < STUCK_BACKUP_TICKS) {
             if (nudgeCooldown == 0) {
                 InputUtils.setJump(true);
                 boolean left = Math.random() < 0.5;
@@ -314,43 +351,60 @@ public class PathProcessor {
             return false;
         }
 
-        if (stuckTicks == threshold && settings.canAutoRepath()) {
-            BlockPos goal = path.get(path.size() - 1).getPos();
+        // Stage 2: Back up then repath (V5: STUCK_TICKS_BACKUP_RECALC = 44)
+        if (stuckTicks == STUCK_BACKUP_TICKS && settings.canAutoRepath()) {
             client.player.sendMessage(
-                Text.literal("§e[Goat] Stuck — repathing..."), false);
-
-            repathing = true;
-            InputUtils.releaseAll();
-
-            int maxNodes = settings.getMaxNodes();
-            int maxDrop = settings.getMaxDrop();
-            BlockPos start = client.player.getBlockPos().down();
-
-            CompletableFuture.supplyAsync(() ->
-                AStarPathfinder.computePath(start, goal, maxNodes, maxDrop)
-            ).thenAccept(newPath -> client.execute(() -> {
-                repathing = false;
-                if (newPath != null) {
-                    setPath(newPath);
-                    client.player.sendMessage(
-                        Text.literal("§a[Goat] Repath done — " + newPath.size() + " nodes."), false);
-                } else {
-                    stuckTicks = threshold + threshold / 2;
-                    client.player.sendMessage(
-                        Text.literal("§c[Goat] Repath failed."), false);
-                }
-            }));
+                Text.literal("§e[Goat] Stuck — backing up..."), false);
+            backupTicks = 10;
+            stuckTicks = 0;
             return true;
         }
 
-        if (stuckTicks >= threshold * 2) {
+        // Stage 3: Direct repath without backup
+        if (stuckTicks == STUCK_REPATH_TICKS && settings.canAutoRepath()) {
+            triggerRepath(client, settings);
+            return true;
+        }
+
+        // Give up after extended stuck
+        if (stuckTicks >= STUCK_REPATH_TICKS + 40) {
             client.player.sendMessage(
-                Text.literal("§c[Goat] Repath failed. Stopping."), false);
+                Text.literal("§c[Goat] Cannot recover. Stopping."), false);
             finish(client);
             return true;
         }
 
         return false;
+    }
+
+    private void triggerRepath(MinecraftClient client, PathfinderTest settings) {
+        if (path == null || path.isEmpty()) return;
+        BlockPos goal = path.get(path.size() - 1).getPos();
+        client.player.sendMessage(
+            Text.literal("§e[Goat] Repathing..."), false);
+
+        repathing = true;
+        InputUtils.releaseAll();
+
+        int maxNodes = settings.getMaxNodes();
+        int maxDrop = settings.getMaxDrop();
+        BlockPos start = client.player.getBlockPos().down();
+
+        CompletableFuture.supplyAsync(() -> {
+            List<PathNode> raw = AStarPathfinder.computePath(start, goal, maxNodes, maxDrop);
+            return raw != null ? PathSmoother.smooth(raw) : null;
+        }).thenAccept(newPath -> client.execute(() -> {
+            repathing = false;
+            if (newPath != null) {
+                setPath(newPath);
+                client.player.sendMessage(
+                    Text.literal("§a[Goat] Repath done — " + newPath.size() + " nodes."), false);
+            } else {
+                stuckTicks = STUCK_REPATH_TICKS;
+                client.player.sendMessage(
+                    Text.literal("§c[Goat] Repath failed."), false);
+            }
+        }));
     }
 
     // ────────────────────────────────────────────────── helpers
