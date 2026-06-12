@@ -3,6 +3,7 @@ package com.justingoat.goat.client.module.mining;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 
@@ -109,6 +110,7 @@ public final class RaytraceUtils {
             }
 
             if (pass == 0) {
+                if (!isFaceExposed(world, bx, by, bz, axis, localSign)) continue;
                 double[][] samples = primarySamples(axis, localSign, bx, by, bz, cx, cy, cz, eyePos);
                 for (double[] s : samples) {
                     if (isLineClear(world, eyePos.x, eyePos.y, eyePos.z, s[0], s[1], s[2], ignorePos)) {
@@ -123,6 +125,7 @@ public final class RaytraceUtils {
                     }
                 }
             } else {
+                if (!isFaceExposed(world, bx, by, bz, axis, localSign)) continue;
                 double[][] fallback = fallbackSamples(axis, localSign, bx, by, bz, cx, cy, cz);
                 for (double[] s : fallback) {
                     if (isLineClear(world, eyePos.x, eyePos.y, eyePos.z, s[0], s[1], s[2], ignorePos)) {
@@ -139,6 +142,32 @@ public final class RaytraceUtils {
             }
         }
         return null;
+    }
+
+    public static boolean hasExposedFace(ClientWorld world, BlockPos pos) {
+        for (Direction direction : Direction.values()) {
+            BlockPos neighbor = pos.offset(direction);
+            BlockState state = world.getBlockState(neighbor);
+            if (state.isAir() || state.getCollisionShape(world, neighbor).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isFaceExposed(ClientWorld world, int bx, int by, int bz, int axis, double sign) {
+        Direction direction;
+        if (axis == 0) {
+            direction = sign > 0 ? Direction.EAST : Direction.WEST;
+        } else if (axis == 1) {
+            direction = sign > 0 ? Direction.UP : Direction.DOWN;
+        } else {
+            direction = sign > 0 ? Direction.SOUTH : Direction.NORTH;
+        }
+
+        BlockPos neighbor = new BlockPos(bx, by, bz).offset(direction);
+        BlockState state = world.getBlockState(neighbor);
+        return state.isAir() || state.getCollisionShape(world, neighbor).isEmpty();
     }
 
     private static double[][] primarySamples(int axis, double sign, int bx, int by, int bz,

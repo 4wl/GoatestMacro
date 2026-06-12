@@ -35,6 +35,7 @@ public class MiningBot {
     private static final double UNSNEAK_LARGE_MOVE = 5.5;
     private static final double UNSNEAK_DROP_Y = 0.5;
     private static final int STUCK_TIMEOUT_TICKS = 60;
+    private static final int STUCK_SKIP_TICKS = 120;
     private static final int BEDROCK_COOLDOWN_TICKS = 5;
 
     private static final double[][] VISIBILITY_OFFSETS = {
@@ -64,6 +65,7 @@ public class MiningBot {
     private int totalTicks = 0;
     private int sameBlockTicks = 0;
     private final Set<Long> bedrockBlacklist = new HashSet<>();
+    private final Map<Long, Integer> skippedTargets = new HashMap<>();
     private int bedrockCooldown = 0;
 
     private RotationUtils rotationHelper;
@@ -168,6 +170,7 @@ public class MiningBot {
 
         tickCount++;
         if (bedrockCooldown > 0) bedrockCooldown--;
+        tickSkippedTargets();
         bedrockBlacklist.removeIf(pos -> {
             BlockPos bp = BlockPos.fromLong(pos);
             String id = getBlockId(world, bp);
@@ -192,6 +195,7 @@ public class MiningBot {
             if (blockId != null && blockId.contains("bedrock")) {
                 bedrockBlacklist.add(target.pos.asLong());
             }
+            skippedTargets.remove(target.pos.asLong());
             currentTarget = null;
             allowScan = true;
             scanForBlock(world, player);
@@ -203,11 +207,7 @@ public class MiningBot {
 
         sameBlockTicks++;
         if (sameBlockTicks > STUCK_TIMEOUT_TICKS) {
-            bedrockBlacklist.add(target.pos.asLong());
-            currentTarget = null;
-            sameBlockTicks = 0;
-            allowScan = true;
-            scanForBlock(world, player);
+            skipCurrentTarget(world, player);
             return;
         }
 
@@ -227,8 +227,8 @@ public class MiningBot {
                 rotateToTarget(player);
                 return;
             }
-            scanForBlock(world, player);
-            allowScan = false;
+            skipCurrentTarget(world, player);
+            return;
         }
 
         if (movement) {
@@ -278,7 +278,10 @@ public class MiningBot {
             String blockId = getBlockId(world, pos);
             Integer targetCost = blockId != null ? costMap.get(blockId) : null;
 
-            if (targetCost != null && targetCost > 0 && !bedrockBlacklist.contains(pos.asLong())) {
+            if (targetCost != null && targetCost > 0
+                    && !bedrockBlacklist.contains(pos.asLong())
+                    && !isSkipped(pos)
+                    && RaytraceUtils.hasExposedFace(world, pos)) {
                 double dx = pos.getX() + 0.5 - eyePos.x;
                 double dy = pos.getY() + 0.5 - eyePos.y;
                 double dz = pos.getZ() + 0.5 - eyePos.z;
@@ -313,18 +316,6 @@ public class MiningBot {
         }
 
         List<MiningTarget> visible = evaluateCandidates(world, reachable, eyePos, lookVec, mineReachSq);
-
-        if (visible.isEmpty() && !reachable.isEmpty()) {
-            reachable.sort(Comparator.comparingDouble(c -> c.cheapCost));
-            for (BfsCandidate c : reachable) {
-                if (visible.size() >= REACHABLE_VISIBLE_BUDGET) break;
-                Vec3d center = new Vec3d(c.pos.getX() + 0.5, c.pos.getY() + 0.5, c.pos.getZ() + 0.5);
-                if (!RaytraceUtils.isLineClear(world, eyePos, center, c.pos)) continue;
-                MiningTarget t = new MiningTarget(c.pos, c.cheapCost, c.blockId, MiningTarget.TargetMode.REACHABLE);
-                t.withAim(center.x, center.y, center.z, Math.sqrt(eyePos.squaredDistanceTo(center)));
-                visible.add(t);
-            }
-        }
 
         if (visible.isEmpty() && !approach.isEmpty()) {
             approach.sort(Comparator.comparingDouble(t -> t.cost));
@@ -522,6 +513,7 @@ public class MiningBot {
 
         if (same && lastBlockType != null && !lastBlockType.equals(blockId)) {
             if (!blockId.contains("air") && !blockId.contains("bedrock")) {
+                skippedTargets.remove(target.pos.asLong());
                 lastBlockType = blockId;
                 resetTickCounters();
                 return false;
@@ -535,6 +527,27 @@ public class MiningBot {
             lastBlockType = blockId;
         }
         return true;
+    }
+
+    private void skipCurrentTarget(ClientWorld world, ClientPlayerEntity player) {
+        if (currentTarget != null) {
+            skippedTargets.put(currentTarget.pos.asLong(), STUCK_SKIP_TICKS);
+            foundLocations.removeIf(t -> t.pos.equals(currentTarget.pos));
+        }
+        currentTarget = null;
+        sameBlockTicks = 0;
+        allowScan = true;
+        scanForBlock(world, player);
+    }
+
+    private boolean isSkipped(BlockPos pos) {
+        Integer ticks = skippedTargets.get(pos.asLong());
+        return ticks != null && ticks > 0;
+    }
+
+    private void tickSkippedTargets() {
+        skippedTargets.replaceAll((pos, ticks) -> ticks - 1);
+        skippedTargets.entrySet().removeIf(entry -> entry.getValue() <= 0);
     }
 
     private void incrementMiningCounters(ClientPlayerEntity player) {
@@ -594,6 +607,7 @@ public class MiningBot {
         lastBlockType = null;
         sameBlockTicks = 0;
         bedrockBlacklist.clear();
+        skippedTargets.clear();
         bedrockCooldown = 0;
         resetTickCounters();
         if (rotationHelper != null) {
