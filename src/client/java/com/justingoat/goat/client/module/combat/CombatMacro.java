@@ -16,6 +16,7 @@ import com.justingoat.goat.client.utils.MouseUtils;
 import com.justingoat.goat.client.utils.RandomUtils;
 import com.justingoat.goat.client.utils.RotationInterpolator;
 import com.justingoat.goat.client.utils.RotationUtils;
+import com.justingoat.goat.client.utils.ScoreboardUtils;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
@@ -65,6 +66,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     private final BooleanValue sprint;
     private final BooleanValue autoHeal;
     private final BooleanValue antiPlayer;
+    private final BooleanValue renderPath;
 
     // Mob name whitelist — empty = accept all hostile entities
     // Populated via config; comma-separated in GUI, parsed to Set
@@ -97,10 +99,9 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     private int waitingTicks = 0;
     private static final int WAITING_CLEAR_TICKS = 60; // 3 seconds of no threat → resume
 
-    // ── Pursuit mode transition ─────────────────────────────────────────
-    private static final double FAR_PURSUIT_THRESHOLD = 10.0;
-    private static final double DIRECT_STRAFE_THRESHOLD = 10.0;
+    // ── Pursuit mode ─────────────────────────────────────────────────────
     private int directStrafeStuckTicks = 0;
+    private static final int STRAFE_STUCK_PATHFIND_THRESHOLD = 40;
 
     // ═══════════════════════════════════════════════════ Constructor
 
@@ -116,12 +117,13 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
         rotSpeed         = addNumber("RotSpeed", 0.6, 0.1, 1.0);
 
         attackMode = addMode("AttackMode", "Melee", "Melee", "Mage");
-        mobFilter  = addMode("MobFilter", "All", "All", "Zealot", "Revenant",
-                "Sven", "Tarantula", "Voidgloom", "Custom");
+        mobFilter  = addMode("MobFilter", "All", "All", "Zealot", "Crypt / Rev",
+                "Revenant", "Sven", "Tarantula", "Voidgloom", "Custom");
 
         sprint     = addBoolean("Sprint", true);
         autoHeal   = addBoolean("AutoHeal", true);
         antiPlayer = addBoolean("AntiPlayer", true);
+        renderPath = addBoolean("RenderPath", true);
     }
 
     // ═══════════════════════════════════════════════════ Lifecycle
@@ -132,6 +134,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
         super.setEnabled(enabled);
 
         if (enabled) {
+            FailsafeManager.getInstance().reset();
             state = State.SEARCHING;
             currentTarget = null;
             targetLostTicks = 0;
@@ -206,6 +209,14 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
             return;
         }
 
+        // Re-engage previous target if still valid
+        if (currentTarget != null && isValidTarget(client, currentTarget)
+                && passesFilter(client, currentTarget)) {
+            targetLostTicks = 0;
+            state = State.PURSUING;
+            return;
+        }
+
         LivingEntity target = findBestTarget(client);
         if (target == null) return;
 
@@ -231,23 +242,16 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
             return;
         }
 
-        // Validate target still alive and in range
+        // Validate target — stick with current until confirmed dead/gone
         if (!isValidTarget(client, currentTarget)) {
             targetLostTicks++;
             if (targetLostTicks > TARGET_LOST_THRESHOLD) {
                 abortPursuit();
+                currentTarget = null;
                 state = State.SEARCHING;
                 return;
             }
-            // Try to find a new target
-            LivingEntity newTarget = findBestTarget(client);
-            if (newTarget != null) {
-                currentTarget = newTarget;
-                targetLostTicks = 0;
-            } else {
-                // Keep pursuing last known position briefly
-                return;
-            }
+            return;
         } else {
             targetLostTicks = 0;
         }
@@ -262,42 +266,42 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
             return;
         }
 
-        // Hybrid pursuit: A* for far, direct strafe for close
-        if (dist > FAR_PURSUIT_THRESHOLD) {
-            tickFarPursuit(client);
+        // If A* path is active, follow it but abort once close enough
+        if (pathProcessor.getPath() != null && !pathProcessor.isDone()) {
+            if (dist <= attackRange.getValue() + 3.0) {
+                pathProcessor.stop();
+                directStrafeStuckTicks = 0;
+                tickDirectStrafe(client, dist);
+            } else {
+                tickFarPursuit(client);
+            }
         } else {
-            tickDirectStrafe(client, dist);
+            // Default: always direct strafe toward mob
+            // Only fall back to A* if stuck for too long (real obstacle)
+            if (directStrafeStuckTicks >= STRAFE_STUCK_PATHFIND_THRESHOLD && dist > attackRange.getValue() + 3.0) {
+                directStrafeStuckTicks = 0;
+                requestRepath(client, currentTarget.getBlockPos().down());
+            } else {
+                tickDirectStrafe(client, dist);
+            }
         }
     }
 
-    /**
-     * Far pursuit: A* pathfinding to target's block position.
-     * Repath when target moves >5 blocks from last path destination.
-     */
     private void tickFarPursuit(MinecraftClient client) {
-        // If PathProcessor is active, let it drive movement
-        if (pathProcessor.getPath() != null && !pathProcessor.isDone()) {
-            // Check if target has moved significantly — repath
-            BlockPos targetBlock = currentTarget.getBlockPos().down();
-            List<PathNode> currentPath = pathProcessor.getPath();
-            if (currentPath != null && !currentPath.isEmpty()) {
-                BlockPos pathEnd = currentPath.get(currentPath.size() - 1).getPos();
-                double drift = Math.sqrt(targetBlock.getSquaredDistance(pathEnd));
-                if (drift > 5.0 && !pathing) {
-                    requestRepath(client, targetBlock);
-                }
+        // Repath if target moved significantly from path destination
+        BlockPos targetBlock = currentTarget.getBlockPos().down();
+        List<PathNode> currentPath = pathProcessor.getPath();
+        if (currentPath != null && !currentPath.isEmpty()) {
+            BlockPos pathEnd = currentPath.get(currentPath.size() - 1).getPos();
+            double drift = Math.sqrt(targetBlock.getSquaredDistance(pathEnd));
+            if (drift > 5.0 && !pathing) {
+                requestRepath(client, targetBlock);
             }
-
-            // PathProcessor needs a PathfinderTest for settings — we create a minimal shim
-            pathProcessor.tick(client, createPathSettings());
-            return;
         }
 
-        // No active path — compute one
-        if (!pathing) {
-            BlockPos targetBlock = currentTarget.getBlockPos().down();
-            requestRepath(client, targetBlock);
-        }
+        var settings = createPathSettings();
+        if (settings == null) return;
+        pathProcessor.tick(client, settings);
     }
 
     /**
@@ -305,11 +309,6 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
      * Uses RotationUtils to face the mob and walks forward.
      */
     private void tickDirectStrafe(MinecraftClient client, double dist) {
-        // Kill any active A* path — we're close enough for direct movement
-        if (pathProcessor.getPath() != null) {
-            pathProcessor.stop();
-        }
-
         initRotationForTarget(client);
 
         // Aim at target's bounding box center
@@ -352,19 +351,19 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
             }
         }
 
-        // Stuck detection for direct strafe
+        // Jump on collision
+        if (client.player.horizontalCollision && client.player.isOnGround()) {
+            InputUtils.setJump(true);
+        } else {
+            InputUtils.setJump(false);
+        }
+
+        // Stuck detection — counts up for potential A* fallback
         double speed = client.player.getVelocity().horizontalLength();
         if (speed < 0.01) {
             directStrafeStuckTicks++;
-            if (directStrafeStuckTicks > 10) {
-                InputUtils.setJump(true);
-                if (directStrafeStuckTicks > 20) {
-                    directStrafeStuckTicks = 0;
-                }
-            }
         } else {
             directStrafeStuckTicks = 0;
-            InputUtils.setJump(false);
         }
     }
 
@@ -596,58 +595,41 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     }
 
     private boolean passesFilter(MinecraftClient client, LivingEntity entity) {
-        // Self check
         if (entity == client.player) return false;
-
-        // Dead or removed
         if (!entity.isAlive() || entity.isDead()) return false;
-
-        // Invulnerable
-        if (entity.isInvulnerable()) return false;
-
-        // ArmorStands (Skyblock damage numbers, nametags, holograms)
         if (entity instanceof ArmorStandEntity) return false;
-
-        // Other players — never target
         if (entity instanceof AbstractClientPlayerEntity) return false;
 
-        // Must be hostile-type (HostileEntity covers zombies, skeletons, endermen, etc.)
-        // Also include Slime (extends MobEntity, not HostileEntity) and tamed wolves
         boolean isHostile = entity instanceof HostileEntity
                 || entity instanceof SlimeEntity;
 
-        // Skyblock mobs sometimes use non-hostile entity types with custom names.
-        // If mob has a custom name and matches our whitelist, accept it regardless.
-        String entityName = getStrippedName(entity);
-
         if (!isHostile) {
-            // Reject pets — wolves following players, etc.
             if (entity instanceof WolfEntity wolf) {
                 if (wolf.isTamed()) return false;
             }
-
-            // Only accept non-hostile entities if they have a matching custom name
-            if (entityName.isEmpty()) return false;
-            if (!matchesMobFilter(entityName)) return false;
         }
 
-        // Mob name whitelist check (when not "All")
-        if (!"All".equals(mobFilter.getValue())) {
-            if (entityName.isEmpty()) return false;
-            if (!matchesMobFilter(entityName)) return false;
+        String filterMode = mobFilter.getValue();
+        if ("All".equals(filterMode)) {
+            if (!isHostile) {
+                String name = getSkyblockMobName(client, entity);
+                return !name.isEmpty();
+            }
+            return true;
         }
 
-        return true;
+        String mobName = getSkyblockMobName(client, entity);
+        if (mobName.isEmpty()) return false;
+        return matchesMobFilter(mobName);
     }
 
     private boolean isValidTarget(MinecraftClient client, LivingEntity entity) {
         if (entity == null) return false;
         if (!entity.isAlive() || entity.isDead()) return false;
         if (entity.isRemoved()) return false;
-        if (entity.isInvulnerable()) return false;
 
         double distSq = entity.squaredDistanceTo(client.player.getX(), client.player.getY(), client.player.getZ());
-        double maxRange = scanRadius.getValue() + 10.0; // generous keepalive range
+        double maxRange = scanRadius.getValue() + 10.0;
         return distSq <= maxRange * maxRange;
     }
 
@@ -655,9 +637,11 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
         String filterMode = mobFilter.getValue();
         if ("All".equals(filterMode)) return true;
 
-        // Built-in presets
+        if ("Crypt / Rev".equals(filterMode)) {
+            return matchesCryptRev(name);
+        }
+
         if ("Custom".equals(filterMode)) {
-            // Check against parsed whitelist
             if (mobWhitelist.isEmpty()) return true;
             for (String entry : mobWhitelist) {
                 if (name.toLowerCase().contains(entry.toLowerCase())) return true;
@@ -665,22 +649,39 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
             return false;
         }
 
-        // Single-mob presets
         return name.toLowerCase().contains(filterMode.toLowerCase());
     }
 
-    /**
-     * Strip Minecraft formatting codes (§x) from entity display name.
-     */
     private String getStrippedName(LivingEntity entity) {
-        if (entity.getCustomName() == null && entity.getDisplayName() == null) return "";
-        String raw;
         if (entity.getCustomName() != null) {
-            raw = entity.getCustomName().getString();
-        } else {
-            raw = entity.getDisplayName().getString();
+            return stripFormatting(entity.getCustomName().getString());
         }
-        return raw.replaceAll("§[0-9a-fk-or]", "").trim();
+        if (entity.getDisplayName() != null) {
+            return stripFormatting(entity.getDisplayName().getString());
+        }
+        return "";
+    }
+
+    private String getSkyblockMobName(MinecraftClient client, LivingEntity entity) {
+        String own = getStrippedName(entity);
+        if (!own.isEmpty() && !own.equals(entity.getType().getName().getString())) {
+            return own;
+        }
+        Box searchBox = entity.getBoundingBox().expand(0.5, 3.0, 0.5);
+        for (Entity nearby : client.world.getOtherEntities(entity, searchBox)) {
+            if (!(nearby instanceof ArmorStandEntity armorStand)) continue;
+            if (!armorStand.isCustomNameVisible()) continue;
+            if (armorStand.getCustomName() == null) continue;
+            String name = stripFormatting(armorStand.getCustomName().getString());
+            if (name.isEmpty()) continue;
+            if (!name.matches(".*[a-zA-Z].*")) continue;
+            return name;
+        }
+        return own;
+    }
+
+    private static String stripFormatting(String raw) {
+        return raw.replaceAll("§[0-9a-fk-orx]", "").trim();
     }
 
     // ═══════════════════════════════════════════════════ Anti-Player
@@ -789,13 +790,10 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
      * we create a lightweight adapter.
      */
     private com.justingoat.goat.client.module.movement.PathfinderTest createPathSettings() {
-        // PathProcessor requires a PathfinderTest instance for settings reads.
-        // We use the registered PathfinderTest module if available.
-        GoatModule pfTest = com.justingoat.goat.client.module.ModuleManager.findByName("PathfinderTest");
+        GoatModule pfTest = com.justingoat.goat.client.module.ModuleManager.findByName("Pathfinder");
         if (pfTest instanceof com.justingoat.goat.client.module.movement.PathfinderTest pt) {
             return pt;
         }
-        // Fallback: should never happen since PathfinderTest is always registered
         return null;
     }
 
@@ -819,6 +817,51 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
         mobWhitelist.clear();
     }
 
+    // ═══════════════════════════════════════════════════ Render API
+
+    public PathProcessor getPathProcessor() { return pathProcessor; }
+    public boolean shouldRenderPath() { return renderPath.getValue(); }
+    public LivingEntity getCurrentTarget() { return currentTarget; }
+
+    // ═══════════════════════════════════════════════════ Area-Based Filtering
+
+    private static final java.util.Map<String, List<String>> AREA_MOB_MAP = new java.util.HashMap<>();
+    static {
+        AREA_MOB_MAP.put("graveyard", Arrays.asList("graveyard zombie", "zombie villager"));
+        AREA_MOB_MAP.put("coal mine", Arrays.asList("crypt ghoul"));
+        AREA_MOB_MAP.put("crypt", Arrays.asList("crypt ghoul"));
+    }
+    private static final List<String> CRYPT_REV_BOSS = Arrays.asList("revenant horror", "revenant sycophant", "revenant champion", "deformed revenant", "atoned horror", "atoned champion");
+
+    private String getCurrentArea() {
+        for (String line : ScoreboardUtils.getScoreboardLines()) {
+            String lower = line.toLowerCase().trim();
+            if (lower.contains("graveyard")) return "graveyard";
+            if (lower.contains("coal mine")) return "coal mine";
+            if (lower.contains("crypt")) return "crypt";
+        }
+        return "";
+    }
+
+    private boolean matchesCryptRev(String mobName) {
+        String lower = mobName.toLowerCase();
+        for (String boss : CRYPT_REV_BOSS) {
+            if (lower.contains(boss)) return true;
+        }
+        String area = getCurrentArea();
+        if (area.isEmpty()) {
+            return lower.contains("crypt ghoul")
+                || lower.contains("graveyard zombie")
+                || lower.contains("zombie villager");
+        }
+        List<String> allowed = AREA_MOB_MAP.get(area);
+        if (allowed == null) return false;
+        for (String mob : allowed) {
+            if (lower.contains(mob)) return true;
+        }
+        return false;
+    }
+
     // ═══════════════════════════════════════════════════ HUD
 
     @Override
@@ -828,9 +871,19 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
 
     @Override
     public String getHudState() {
-        String targetName = currentTarget != null ? getStrippedName(currentTarget) : "none";
+        String targetName = "none";
+        if (currentTarget != null) {
+            MinecraftClient mc = MinecraftClient.getInstance();
+            targetName = mc.world != null ? getSkyblockMobName(mc, currentTarget) : getStrippedName(currentTarget);
+        }
         String mode = attackMode.getValue();
-        return state.name() + " | " + mode + " | T: " + targetName;
+        String filter = mobFilter.getValue();
+        String info = state.name() + " | " + mode + " | T: " + targetName;
+        if ("Crypt / Rev".equals(filter)) {
+            String area = getCurrentArea();
+            if (!area.isEmpty()) info += " | " + area;
+        }
+        return info;
     }
 
     // ═══════════════════════════════════════════════════ Hotbar Slot

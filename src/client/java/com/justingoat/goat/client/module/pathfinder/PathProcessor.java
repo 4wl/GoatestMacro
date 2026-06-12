@@ -187,6 +187,10 @@ public class PathProcessor {
             shouldJump = true;
         } else if (moveType == PathNode.MoveType.JUMP_ACROSS) {
             shouldJump = true;
+        } else if (needsEarlyJump(client, px, py, pz)) {
+            shouldJump = true;
+        } else if (client.player.horizontalCollision && client.player.isOnGround()) {
+            shouldJump = true;
         } else if (isJumpableObstacle(client)) {
             shouldJump = true;
         }
@@ -261,6 +265,24 @@ public class PathProcessor {
             .getCollisionShape(client.world, topAhead).isEmpty();
 
         return feetBlocked && bodyFree && headFree;
+    }
+
+    // ───────────────────────────────────── early jump lookahead
+
+    private boolean needsEarlyJump(MinecraftClient client, double px, double py, double pz) {
+        if (path == null) return false;
+        int lookAhead = Math.min(currentIndex + 3, path.size());
+        for (int i = currentIndex + 1; i < lookAhead; i++) {
+            PathNode node = path.get(i);
+            PathNode.MoveType mt = node.getMoveType();
+            if (mt != PathNode.MoveType.STEP_UP && mt != PathNode.MoveType.JUMP_ACROSS) continue;
+            Vec3d nc = nodeCenter(node);
+            double hDist = Math.sqrt(hDistSq(px, pz, nc.x, nc.z));
+            if (hDist < 2.0 && client.player.isOnGround()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ───────────────────────────────────────── stuck detection

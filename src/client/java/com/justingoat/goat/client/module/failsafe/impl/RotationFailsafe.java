@@ -65,6 +65,9 @@ public class RotationFailsafe extends Failsafe {
         GoatModule foraging = ModuleManager.findByName("ForagingMacro");
         if (foraging != null && foraging.isEnabled()) return true;
 
+        GoatModule combat = ModuleManager.findByName("CombatMacro");
+        if (combat != null && combat.isEnabled()) return true;
+
         GoatModule pathfinder = ModuleManager.findByName("Pathfinder");
         return pathfinder != null && pathfinder.isEnabled();
     }

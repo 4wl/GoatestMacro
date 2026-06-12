@@ -1,16 +1,20 @@
 package com.justingoat.goat.client.module.pathfinder;
 
 import com.justingoat.goat.client.module.ModuleManager;
+import com.justingoat.goat.client.module.combat.CombatMacro;
 import com.justingoat.goat.client.module.movement.ForagingMacro;
 import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.module.GoatModule;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayers;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.entity.LivingEntity;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 import org.joml.Matrix4f;
 
@@ -38,6 +42,7 @@ public class PathRenderer {
     private static final float[] COLOR_CURRENT = {1.0f, 1.0f, 1.0f, 1.0f}; // white
     private static final float[] COLOR_LINE    = {0.3f, 0.85f, 1.0f, 0.6f}; // light blue
     private static final float[] COLOR_FORAGING_TARGET = {1.0f, 0.9f, 0.1f, 0.75f};
+    private static final float[] COLOR_COMBAT_TARGET  = {1.0f, 0.2f, 0.2f, 0.85f};
 
     private static final float NODE_SIZE = 0.15f; // half-width of node marker box
     private static final float CURRENT_SIZE = 0.22f;
@@ -50,10 +55,18 @@ public class PathRenderer {
         GoatModule module = ModuleManager.findByName("Pathfinder");
         PathProcessor processor = null;
         BlockPos foragingTarget = null;
+        LivingEntity combatTarget = null;
         boolean shouldRender = false;
 
         if (module instanceof PathfinderTest pt && module.isEnabled() && pt.shouldRenderPath()) {
             processor = pt.getPathProcessor();
+            shouldRender = true;
+        }
+
+        GoatModule combat = ModuleManager.findByName("CombatMacro");
+        if (combat instanceof CombatMacro cm && combat.isEnabled() && cm.shouldRenderPath()) {
+            processor = cm.getPathProcessor();
+            combatTarget = cm.getCurrentTarget();
             shouldRender = true;
         }
 
@@ -69,7 +82,7 @@ public class PathRenderer {
         int curIdx = processor == null ? 0 : processor.getCurrentIndex();
         boolean hasPath = processor != null && !processor.isDone()
             && path != null && !path.isEmpty() && curIdx < path.size();
-        if (!hasPath && foragingTarget == null) return;
+        if (!hasPath && foragingTarget == null && combatTarget == null) return;
 
         MatrixStack matrices = context.matrices();
         VertexConsumerProvider consumers = context.consumers();
@@ -142,6 +155,22 @@ public class PathRenderer {
             float z = foragingTarget.getZ() + 0.5f;
             float s = 0.32f;
             drawWireBox(lineBuffer, posMatrix, entry, x - s, y - s, z - s, x + s, y + s, z + s, c[0], c[1], c[2], c[3]);
+        }
+
+        if (combatTarget != null && combatTarget.isAlive()) {
+            float[] c = COLOR_COMBAT_TARGET;
+            float tickDelta = MinecraftClient.getInstance().getRenderTickCounter().getTickProgress(false);
+            double ex = combatTarget.lastRenderX + (combatTarget.getX() - combatTarget.lastRenderX) * tickDelta;
+            double ey = combatTarget.lastRenderY + (combatTarget.getY() - combatTarget.lastRenderY) * tickDelta;
+            double ez = combatTarget.lastRenderZ + (combatTarget.getZ() - combatTarget.lastRenderZ) * tickDelta;
+            Box bb = combatTarget.getBoundingBox();
+            float hw = (float) ((bb.maxX - bb.minX) * 0.5);
+            float hh = (float) (bb.maxY - bb.minY);
+            float hd = (float) ((bb.maxZ - bb.minZ) * 0.5);
+            drawWireBox(lineBuffer, posMatrix, entry,
+                (float) ex - hw, (float) ey, (float) ez - hd,
+                (float) ex + hw, (float) ey + hh, (float) ez + hd,
+                c[0], c[1], c[2], c[3]);
         }
 
         matrices.pop();
