@@ -27,6 +27,8 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.text.Text;
 
+import com.justingoat.goat.client.module.mining.RaytraceUtils;
+
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
@@ -495,7 +497,11 @@ public class ForagingMacro extends GoatModule implements MacroHudInfo {
         }
 
         lastScanMatchedLogs = matchedLogs;
-        treeBases.sort(Comparator.comparingDouble(pos -> playerDistSq(client, pos)));
+        Vec3d eyePos = client.player.getEyePos();
+        treeBases.sort(Comparator.<BlockPos, Boolean>comparing(pos -> {
+            Vec3d center = new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+            return !RaytraceUtils.isLineClear(client.world, eyePos, center, pos);
+        }).thenComparingDouble(pos -> playerDistSq(client, pos)));
         return treeBases;
     }
 
@@ -556,6 +562,7 @@ public class ForagingMacro extends GoatModule implements MacroHudInfo {
         if (base == null || client.world == null || client.player == null) return null;
 
         Set<Block> targetBlocks = getTargetLogBlocks();
+        Vec3d eyePos = client.player.getEyePos();
         BlockPos best = null;
         double bestScore = Double.MAX_VALUE;
 
@@ -566,11 +573,10 @@ public class ForagingMacro extends GoatModule implements MacroHudInfo {
                     if (!targetBlocks.contains(client.world.getBlockState(pos).getBlock())) continue;
                     if (requireReach && !canReachLog(client, pos)) continue;
 
-                    double score = client.player.getEyePos().squaredDistanceTo(
-                        pos.getX() + 0.5,
-                        pos.getY() + 0.5,
-                        pos.getZ() + 0.5
-                    );
+                    Vec3d logCenter = new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+                    if (!RaytraceUtils.isLineClear(client.world, eyePos, logCenter, pos)) continue;
+
+                    double score = eyePos.squaredDistanceTo(logCenter);
                     score += y * 0.15;
                     if (score < bestScore) {
                         bestScore = score;

@@ -9,6 +9,12 @@ import com.justingoat.goat.client.module.movement.AutoSprint;
 import com.justingoat.goat.client.module.movement.FarmingMacro;
 import com.justingoat.goat.client.module.movement.ForagingMacro;
 import com.justingoat.goat.client.module.movement.PathfinderTest;
+import com.justingoat.goat.client.module.mining.MiningMacro;
+import com.justingoat.goat.client.module.mining.NukerMacro;
+import com.justingoat.goat.client.module.mining.OreMacro;
+import com.justingoat.goat.client.module.mining.GemstoneMacro;
+import com.justingoat.goat.client.module.mining.PowderMacro;
+import com.justingoat.goat.client.module.mining.CommissionMacro;
 import com.justingoat.goat.client.module.render.CustomFOV;
 import com.justingoat.goat.client.module.render.FullBright;
 import com.justingoat.goat.client.module.render.TimeChanger;
@@ -20,6 +26,7 @@ public final class ModuleManager {
     static {
         registerCombatModules();
         registerMovementModules();
+        registerMiningModules();
         registerRenderModules();
         registerSettingsModules();
     }
@@ -51,6 +58,15 @@ public final class ModuleManager {
         register(new FarmingMacro());
         register(new ForagingMacro());
         register(new PathfinderTest());
+    }
+
+    private static void registerMiningModules() {
+        register(new MiningMacro());
+        register(new NukerMacro());
+        register(new OreMacro());
+        register(new GemstoneMacro());
+        register(new PowderMacro());
+        register(new CommissionMacro());
     }
 
     private static void registerRenderModules() {

@@ -78,20 +78,60 @@ public class GoatClient implements ClientModInitializer {
                                 int x = IntegerArgumentType.getInteger(context, "x");
                                 int y = IntegerArgumentType.getInteger(context, "y");
                                 int z = IntegerArgumentType.getInteger(context, "z");
-                                
                                 BlockPos target = new BlockPos(x, y, z);
-                                
-                                GoatModule module = ModuleManager.getModules().stream()
-                                    .filter(m -> m.getName().equals("Pathfinder"))
-                                    .findFirst().orElse(null);
-                                    
-                                if (module instanceof PathfinderTest) {
-                                    ((PathfinderTest) module).pathTarget(target);
+                                GoatModule module = ModuleManager.findByName("Pathfinder");
+                                if (module instanceof PathfinderTest pt) {
+                                    pt.pathTarget(target);
                                     context.getSource().sendFeedback(Text.literal("[Goat] Pathing to " + x + " " + y + " " + z));
                                 } else {
                                     context.getSource().sendError(Text.literal("[Goat] Pathfinder module not found."));
                                 }
-                                
+                                return 1;
+                            })
+                        )
+                    )
+                )
+            );
+
+            dispatcher.register(ClientCommandManager.literal("flyto")
+                .then(ClientCommandManager.argument("x", IntegerArgumentType.integer())
+                    .then(ClientCommandManager.argument("y", IntegerArgumentType.integer())
+                        .then(ClientCommandManager.argument("z", IntegerArgumentType.integer())
+                            .executes(context -> {
+                                int x = IntegerArgumentType.getInteger(context, "x");
+                                int y = IntegerArgumentType.getInteger(context, "y");
+                                int z = IntegerArgumentType.getInteger(context, "z");
+                                BlockPos target = new BlockPos(x, y, z);
+                                GoatModule module = ModuleManager.findByName("Pathfinder");
+                                if (module instanceof PathfinderTest pt) {
+                                    pt.pathTargetFly(target);
+                                    context.getSource().sendFeedback(Text.literal("[Goat] Flying to " + x + " " + y + " " + z));
+                                } else {
+                                    context.getSource().sendError(Text.literal("[Goat] Pathfinder module not found."));
+                                }
+                                return 1;
+                            })
+                        )
+                    )
+                )
+            );
+
+            dispatcher.register(ClientCommandManager.literal("etherwarp")
+                .then(ClientCommandManager.argument("x", IntegerArgumentType.integer())
+                    .then(ClientCommandManager.argument("y", IntegerArgumentType.integer())
+                        .then(ClientCommandManager.argument("z", IntegerArgumentType.integer())
+                            .executes(context -> {
+                                int x = IntegerArgumentType.getInteger(context, "x");
+                                int y = IntegerArgumentType.getInteger(context, "y");
+                                int z = IntegerArgumentType.getInteger(context, "z");
+                                BlockPos target = new BlockPos(x, y, z);
+                                GoatModule module = ModuleManager.findByName("Pathfinder");
+                                if (module instanceof PathfinderTest pt) {
+                                    pt.pathTargetEtherwarp(target);
+                                    context.getSource().sendFeedback(Text.literal("[Goat] Etherwarp to " + x + " " + y + " " + z));
+                                } else {
+                                    context.getSource().sendError(Text.literal("[Goat] Pathfinder module not found."));
+                                }
                                 return 1;
                             })
                         )

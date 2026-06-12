@@ -22,6 +22,7 @@ public class PathProcessor {
     private int currentIndex = 0;
 
     private final RotationUtils rotation = new RotationUtils();
+    private final PathAote aote = new PathAote();
 
     // Stuck detection (horizontal-only)
     private double lastX = Double.NaN;
@@ -71,6 +72,7 @@ public class PathProcessor {
         this.path = null;
         this.repathing = false;
         this.rotation.clear();
+        this.aote.stop();
         RotationInterpolator.clearActive();
         InputUtils.releaseAll();
     }
@@ -175,6 +177,14 @@ public class PathProcessor {
         rotation.setSpeed(settings.getRotationSpeed());
         rotation.tick();
 
+        // ── 4b. AOTE teleport (skip normal movement if used) ──
+        if (settings.isAoteEnabled()) {
+            float aoteYaw = rotation.getCurrentYaw();
+            if (aote.tick(client, path, currentIndex, aoteYaw)) {
+                return;
+            }
+        }
+
         // ── 5. Movement (use rotation's internal yaw, not player's) ─
         float currentYaw = rotation.getCurrentYaw();
         float angleToTarget = Math.abs(MathHelper.wrapDegrees(aimYaw - currentYaw));
@@ -206,6 +216,7 @@ public class PathProcessor {
         } else if (isInFluid(client)) {
             shouldJump = true;
         }
+        if (aote.shouldSuppressJump()) shouldJump = false;
         InputUtils.setJump(shouldJump);
 
         // ── 7. Sprint ───────────────────────────────────────────────

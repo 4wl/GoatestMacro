@@ -46,7 +46,28 @@ public class InputUtils {
         setKey(client.options.sprintKey, pressed);
     }
 
+    public static void setSneak(boolean pressed) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.options == null) return;
+        setKey(client.options.sneakKey, pressed);
+    }
+
+    public static void setUse(boolean pressed) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.options == null) return;
+        setKey(client.options.useKey, pressed);
+    }
+
+    public static void setHotbarSlot(int slot) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.options == null) return;
+        slot = Math.max(0, Math.min(8, slot));
+        client.options.hotbarKeys[slot].setPressed(true);
+    }
+
     public static void releaseAll() {
+        setSneak(false);
+        setUse(false);
         setForward(false);
         setBack(false);
         setLeft(false);

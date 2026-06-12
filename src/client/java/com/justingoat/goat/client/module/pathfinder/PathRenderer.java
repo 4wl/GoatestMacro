@@ -2,6 +2,9 @@ package com.justingoat.goat.client.module.pathfinder;
 
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.combat.CombatMacro;
+import com.justingoat.goat.client.module.mining.MiningMacro;
+import com.justingoat.goat.client.module.mining.MiningBot;
+import com.justingoat.goat.client.module.mining.MiningTarget;
 import com.justingoat.goat.client.module.movement.ForagingMacro;
 import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.module.GoatModule;
@@ -43,8 +46,17 @@ public class PathRenderer {
     private static final float[] COLOR_LINE    = {0.3f, 0.85f, 1.0f, 0.6f}; // light blue
     private static final float[] COLOR_FORAGING_TARGET = {1.0f, 0.9f, 0.1f, 0.75f};
     private static final float[] COLOR_COMBAT_TARGET  = {1.0f, 0.2f, 0.2f, 0.85f};
+    private static final float[] COLOR_FLY_LINE      = {0.4f, 0.7f, 1.0f, 0.7f};
+    private static final float[] COLOR_FLY_NODE      = {0.3f, 0.6f, 1.0f, 0.9f};
+    private static final float[] COLOR_ETHERWARP_LINE  = {0.0f, 0.67f, 1.0f, 0.7f};
+    private static final float[] COLOR_ETHERWARP_NODE  = {0.3f, 1.0f, 0.55f, 0.9f};
+    private static final float[] COLOR_ETHERWARP_START = {0.3f, 1.0f, 0.55f, 0.9f};
+    private static final float[] COLOR_ETHERWARP_END   = {1.0f, 0.35f, 0.35f, 0.9f};
+    private static final float[] COLOR_ETHERWARP_CUR   = {1.0f, 1.0f, 0.2f, 1.0f};
+    private static final float[] COLOR_MINING_TARGET   = {0.0f, 1.0f, 0.9f, 1.0f};
+    private static final float[] COLOR_MINING_CANDIDATE = {0.0f, 0.7f, 0.6f, 0.35f};
 
-    private static final float NODE_SIZE = 0.15f; // half-width of node marker box
+    private static final float NODE_SIZE = 0.15f;
     private static final float CURRENT_SIZE = 0.22f;
 
     public static void register() {
@@ -56,6 +68,7 @@ public class PathRenderer {
         PathProcessor processor = null;
         BlockPos foragingTarget = null;
         LivingEntity combatTarget = null;
+        MiningBot miningBot = null;
         boolean shouldRender = false;
 
         if (module instanceof PathfinderTest pt && module.isEnabled() && pt.shouldRenderPath()) {
@@ -77,12 +90,21 @@ public class PathRenderer {
             shouldRender = true;
         }
 
+        GoatModule mining = ModuleManager.findByName("MiningBot");
+        if (mining instanceof MiningMacro mm && mining.isEnabled()) {
+            MiningBot bot = mm.getBot();
+            if (bot.isEnabled()) {
+                miningBot = bot;
+                shouldRender = true;
+            }
+        }
+
         if (!shouldRender) return;
         List<PathNode> path = processor == null ? null : processor.getPath();
         int curIdx = processor == null ? 0 : processor.getCurrentIndex();
         boolean hasPath = processor != null && !processor.isDone()
             && path != null && !path.isEmpty() && curIdx < path.size();
-        if (!hasPath && foragingTarget == null && combatTarget == null) return;
+        if (!hasPath && foragingTarget == null && combatTarget == null && miningBot == null) return;
 
         MatrixStack matrices = context.matrices();
         VertexConsumerProvider consumers = context.consumers();
@@ -171,6 +193,89 @@ public class PathRenderer {
                 (float) ex - hw, (float) ey, (float) ez - hd,
                 (float) ex + hw, (float) ey + hh, (float) ez + hd,
                 c[0], c[1], c[2], c[3]);
+        }
+
+        // --- Fly path rendering ---
+        List<Vec3d> flyPath = FlyPathProcessor.getRenderPath();
+        if (flyPath != null && flyPath.size() >= 2) {
+            int flyIdx = FlyPathProcessor.getRenderIndex();
+            int flyMax = Math.min(flyPath.size(), flyIdx + 60);
+            for (int i = Math.max(0, flyIdx); i < flyMax - 1; i++) {
+                Vec3d p1 = flyPath.get(i);
+                Vec3d p2 = flyPath.get(i + 1);
+                float dx = (float)(p2.x - p1.x), dy = (float)(p2.y - p1.y), dz = (float)(p2.z - p1.z);
+                float len = (float) Math.sqrt(dx*dx + dy*dy + dz*dz);
+                if (len < 0.001f) continue;
+                float[] c = COLOR_FLY_LINE;
+                lineBuffer.vertex(posMatrix, (float)p1.x, (float)p1.y, (float)p1.z)
+                    .color(c[0], c[1], c[2], c[3]).normal(entry, dx/len, dy/len, dz/len).lineWidth(2.5f);
+                lineBuffer.vertex(posMatrix, (float)p2.x, (float)p2.y, (float)p2.z)
+                    .color(c[0], c[1], c[2], c[3]).normal(entry, dx/len, dy/len, dz/len).lineWidth(2.5f);
+            }
+            for (int i = Math.max(0, flyIdx); i < flyMax; i++) {
+                Vec3d p = flyPath.get(i);
+                float[] c = i == flyIdx ? COLOR_CURRENT : COLOR_FLY_NODE;
+                float s = i == flyIdx ? CURRENT_SIZE : NODE_SIZE;
+                drawWireBox(lineBuffer, posMatrix, entry,
+                    (float)p.x-s, (float)p.y-s, (float)p.z-s,
+                    (float)p.x+s, (float)p.y+s, (float)p.z+s, c[0], c[1], c[2], c[3]);
+            }
+        }
+
+        // --- Etherwarp path rendering ---
+        List<BlockPos> ethHops = EtherwarpPathfinder.getRenderHops();
+        if (ethHops != null && !ethHops.isEmpty()) {
+            int curHop = EtherwarpPathfinder.getRenderCurrentHop();
+            for (int i = 0; i < ethHops.size() - 1; i++) {
+                BlockPos p1 = ethHops.get(i);
+                BlockPos p2 = ethHops.get(i + 1);
+                float x1 = p1.getX()+0.5f, y1 = p1.getY()+1.05f, z1 = p1.getZ()+0.5f;
+                float x2 = p2.getX()+0.5f, y2 = p2.getY()+1.05f, z2 = p2.getZ()+0.5f;
+                float dx = x2-x1, dy = y2-y1, dz = z2-z1;
+                float len = (float) Math.sqrt(dx*dx+dy*dy+dz*dz);
+                if (len < 0.001f) continue;
+                float[] c = COLOR_ETHERWARP_LINE;
+                lineBuffer.vertex(posMatrix, x1, y1, z1).color(c[0],c[1],c[2],c[3]).normal(entry,dx/len,dy/len,dz/len).lineWidth(3.0f);
+                lineBuffer.vertex(posMatrix, x2, y2, z2).color(c[0],c[1],c[2],c[3]).normal(entry,dx/len,dy/len,dz/len).lineWidth(3.0f);
+            }
+            for (int i = 0; i < ethHops.size(); i++) {
+                BlockPos p = ethHops.get(i);
+                float cx = p.getX()+0.5f, cy = p.getY()+1.05f, cz = p.getZ()+0.5f;
+                float[] c;
+                float s;
+                if (i == curHop) { c = COLOR_ETHERWARP_CUR; s = CURRENT_SIZE; }
+                else if (i == 0) { c = COLOR_ETHERWARP_START; s = NODE_SIZE; }
+                else if (i == ethHops.size()-1) { c = COLOR_ETHERWARP_END; s = 0.2f; }
+                else { c = COLOR_ETHERWARP_NODE; s = NODE_SIZE; }
+                drawWireBox(lineBuffer, posMatrix, entry, cx-s, cy-s, cz-s, cx+s, cy+s, cz+s, c[0], c[1], c[2], c[3]);
+            }
+        }
+
+        // --- Mining target ESP ---
+        if (miningBot != null) {
+            MiningTarget currentMiningTarget = miningBot.getCurrentTarget();
+            List<MiningTarget> candidates = miningBot.getFoundLocations();
+
+            if (candidates != null) {
+                for (MiningTarget t : candidates) {
+                    if (t == currentMiningTarget) continue;
+                    BlockPos p = t.pos;
+                    float[] c = COLOR_MINING_CANDIDATE;
+                    drawWireBox(lineBuffer, posMatrix, entry,
+                        p.getX(), p.getY(), p.getZ(),
+                        p.getX() + 1.0f, p.getY() + 1.0f, p.getZ() + 1.0f,
+                        c[0], c[1], c[2], c[3]);
+                }
+            }
+
+            if (currentMiningTarget != null) {
+                BlockPos p = currentMiningTarget.pos;
+                float[] c = COLOR_MINING_TARGET;
+                drawWireBox(lineBuffer, posMatrix, entry,
+                    p.getX(), p.getY(), p.getZ(),
+                    p.getX() + 1.0f, p.getY() + 1.0f, p.getZ() + 1.0f,
+                    c[0], c[1], c[2], c[3]);
+            }
         }
 
         matrices.pop();

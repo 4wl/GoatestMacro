@@ -32,6 +32,8 @@ import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 
+import com.justingoat.goat.client.module.mining.RaytraceUtils;
+
 
 
 import java.util.ArrayList;
@@ -590,7 +592,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     private LivingEntity findBestTarget(MinecraftClient client) {
         double radius = scanRadius.getValue();
         double radiusSq = radius * radius;
-        Vec3d playerPos = new Vec3d(client.player.getX(), client.player.getY(), client.player.getZ());
+        Vec3d eyePos = client.player.getEyePos();
 
         LivingEntity best = null;
         double bestDistSq = Double.MAX_VALUE;
@@ -601,6 +603,10 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
 
             double distSq = living.squaredDistanceTo(client.player.getX(), client.player.getY(), client.player.getZ());
             if (distSq > radiusSq) continue;
+
+            Vec3d targetCenter = getTargetCenter(living);
+            if (!RaytraceUtils.isLineClear(client.world, eyePos, targetCenter, null)) continue;
+
             if (distSq < bestDistSq) {
                 bestDistSq = distSq;
                 best = living;
@@ -646,7 +652,11 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
 
         double distSq = entity.squaredDistanceTo(client.player.getX(), client.player.getY(), client.player.getZ());
         double maxRange = scanRadius.getValue() + 10.0;
-        return distSq <= maxRange * maxRange;
+        if (distSq > maxRange * maxRange) return false;
+
+        Vec3d eyePos = client.player.getEyePos();
+        Vec3d targetCenter = getTargetCenter(entity);
+        return RaytraceUtils.isLineClear(client.world, eyePos, targetCenter, null);
     }
 
     private boolean matchesMobFilter(String name) {

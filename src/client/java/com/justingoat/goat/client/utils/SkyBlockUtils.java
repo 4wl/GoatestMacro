@@ -5,6 +5,8 @@ import com.justingoat.goat.client.events.EventManager;
 import com.justingoat.goat.client.events.impl.hypixel.LocationUpdatePacketEvent;
 import com.justingoat.goat.client.events.impl.skyblock.LocationChangedEvent;
 
+import com.justingoat.goat.client.events.impl.packet.ChatMessageEvent;
+
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -12,11 +14,29 @@ import java.util.regex.Pattern;
 public class SkyBlockUtils {
     private static boolean isOnSkyblock;
     private static Location currentIsland;
+    private static volatile int currentMana = -1;
 
     private static final Pattern ISLAND_PATTERN = Pattern.compile("Area: (.+)");
     private static final Pattern COINS_PATTERN = Pattern.compile("Purse: ([0-9,]+)");
     private static final Pattern BITS_PATTERN = Pattern.compile("Bits: ([0-9,]+)");
     private static final Pattern PROFILE_PATTERN = Pattern.compile("Profile: (.+)");
+    private static final Pattern MANA_PATTERN = Pattern.compile("(\\d+)/(\\d+)✎");
+
+    @EventListener
+    private void onOverlayMessage(ChatMessageEvent event) {
+        if (!event.isOverlay()) return;
+        String msg = event.getMessage();
+        Matcher matcher = MANA_PATTERN.matcher(msg);
+        if (matcher.find()) {
+            try {
+                currentMana = Integer.parseInt(matcher.group(1));
+            } catch (NumberFormatException ignored) {}
+        }
+    }
+
+    public static int getMana() {
+        return currentMana;
+    }
 
     @EventListener
     private void onLocationUpdate(LocationUpdatePacketEvent event) {
