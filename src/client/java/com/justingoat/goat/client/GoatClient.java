@@ -1,24 +1,19 @@
 package com.justingoat.goat.client;
 
+import com.justingoat.goat.client.commands.CommandManager;
+import com.justingoat.goat.client.commands.impl.*;
 import com.justingoat.goat.client.config.GoatConfigManager;
 import com.justingoat.goat.client.gui.GoatMacroScreen;
 import com.justingoat.goat.client.gui.MacroHudRenderer;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
-import com.justingoat.goat.client.module.failsafe.FailsafeTestCommand;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
-import com.mojang.brigadier.arguments.IntegerArgumentType;
 import net.fabricmc.api.ClientModInitializer;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.text.Text;
 import com.justingoat.goat.client.module.GoatModule;
-import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.module.pathfinder.PathRenderer;
 import com.justingoat.goat.client.utils.RotationInterpolator;
 import com.justingoat.goat.client.utils.HypixelUtils;
@@ -70,78 +65,16 @@ public class GoatClient implements ClientModInitializer {
             }
         });
 
-        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
-            FailsafeTestCommand.register(dispatcher);
-
-            dispatcher.register(ClientCommandManager.literal("goto")
-                .then(ClientCommandManager.argument("x", IntegerArgumentType.integer())
-                    .then(ClientCommandManager.argument("y", IntegerArgumentType.integer())
-                        .then(ClientCommandManager.argument("z", IntegerArgumentType.integer())
-                            .executes(context -> {
-                                int x = IntegerArgumentType.getInteger(context, "x");
-                                int y = IntegerArgumentType.getInteger(context, "y");
-                                int z = IntegerArgumentType.getInteger(context, "z");
-                                BlockPos target = new BlockPos(x, y, z);
-                                GoatModule module = ModuleManager.findByName("Pathfinder");
-                                if (module instanceof PathfinderTest pt) {
-                                    pt.pathTarget(target);
-                                    context.getSource().sendFeedback(Text.literal("[Goat] Pathing to " + x + " " + y + " " + z));
-                                } else {
-                                    context.getSource().sendError(Text.literal("[Goat] Pathfinder module not found."));
-                                }
-                                return 1;
-                            })
-                        )
-                    )
-                )
-            );
-
-            dispatcher.register(ClientCommandManager.literal("flyto")
-                .then(ClientCommandManager.argument("x", IntegerArgumentType.integer())
-                    .then(ClientCommandManager.argument("y", IntegerArgumentType.integer())
-                        .then(ClientCommandManager.argument("z", IntegerArgumentType.integer())
-                            .executes(context -> {
-                                int x = IntegerArgumentType.getInteger(context, "x");
-                                int y = IntegerArgumentType.getInteger(context, "y");
-                                int z = IntegerArgumentType.getInteger(context, "z");
-                                BlockPos target = new BlockPos(x, y, z);
-                                GoatModule module = ModuleManager.findByName("Pathfinder");
-                                if (module instanceof PathfinderTest pt) {
-                                    pt.pathTargetFly(target);
-                                    context.getSource().sendFeedback(Text.literal("[Goat] Flying to " + x + " " + y + " " + z));
-                                } else {
-                                    context.getSource().sendError(Text.literal("[Goat] Pathfinder module not found."));
-                                }
-                                return 1;
-                            })
-                        )
-                    )
-                )
-            );
-
-            dispatcher.register(ClientCommandManager.literal("etherwarp")
-                .then(ClientCommandManager.argument("x", IntegerArgumentType.integer())
-                    .then(ClientCommandManager.argument("y", IntegerArgumentType.integer())
-                        .then(ClientCommandManager.argument("z", IntegerArgumentType.integer())
-                            .executes(context -> {
-                                int x = IntegerArgumentType.getInteger(context, "x");
-                                int y = IntegerArgumentType.getInteger(context, "y");
-                                int z = IntegerArgumentType.getInteger(context, "z");
-                                BlockPos target = new BlockPos(x, y, z);
-                                GoatModule module = ModuleManager.findByName("Pathfinder");
-                                if (module instanceof PathfinderTest pt) {
-                                    pt.pathTargetEtherwarp(target);
-                                    context.getSource().sendFeedback(Text.literal("[Goat] Etherwarp to " + x + " " + y + " " + z));
-                                } else {
-                                    context.getSource().sendError(Text.literal("[Goat] Pathfinder module not found."));
-                                }
-                                return 1;
-                            })
-                        )
-                    )
-                )
-            );
-        });
+        CommandManager.INSTANCE.registerCommands(
+            new HelpCommand(),
+            new GotoCommand(),
+            new FlytoCommand(),
+            new EtherwarpCommand(),
+            new SetStartCommand(),
+            new SetEndCommand(),
+            new SetRewarpCommand(),
+            new FailsafeCommand()
+        );
 
         PathRenderer.register();
         MacroHudRenderer.register();

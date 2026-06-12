@@ -60,9 +60,8 @@ public class InputUtils {
 
     public static void setHotbarSlot(int slot) {
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client == null || client.options == null) return;
-        slot = Math.max(0, Math.min(8, slot));
-        client.options.hotbarKeys[slot].setPressed(true);
+        if (client == null || client.player == null) return;
+        client.player.getInventory().setSelectedSlot(Math.max(0, Math.min(8, slot)));
     }
 
     public static void releaseAll() {

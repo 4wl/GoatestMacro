@@ -31,6 +31,7 @@ public class FlyPathProcessor {
 
     private int stuckTicks = 0;
     private double lastX = Double.NaN, lastZ = Double.NaN;
+    private int flyActivationTick = -1;
 
     // Render data
     private static volatile List<Vec3d> renderPath = null;
@@ -47,6 +48,7 @@ public class FlyPathProcessor {
         this.stuckTicks = 0;
         this.lastX = Double.NaN;
         this.lastZ = Double.NaN;
+        this.flyActivationTick = -1;
         this.rotation.clear();
         RotationInterpolator.setActive(rotation);
         renderPath = path;
@@ -79,11 +81,19 @@ public class FlyPathProcessor {
             rotation.init(player.getYaw(), player.getPitch());
         }
 
-        // Ensure flying
+        // Simulate vanilla double-tap jump to activate flight (NCP-safe)
         if (player.getAbilities().allowFlying && !player.getAbilities().flying) {
-            InputUtils.setJump(true);
+            if (flyActivationTick < 0) flyActivationTick = 0;
+            // Tick 0: press jump → vanilla sets abilityResyncCountdown=7
+            // Tick 1: release jump → countdown decrements
+            // Tick 2: press jump again → vanilla detects double-tap, toggles flight
+            // Tick 3: release jump
+            InputUtils.setJump(flyActivationTick == 0 || flyActivationTick == 2);
+            flyActivationTick++;
+            if (flyActivationTick > 3) flyActivationTick = 0;
             return;
         }
+        flyActivationTick = -1;
 
         double px = player.getX(), py = player.getY(), pz = player.getZ();
         renderIndex = currentIndex;
@@ -281,7 +291,7 @@ public class FlyPathProcessor {
         List<Vec3d> result = new ArrayList<>();
         FlyNode cur = end;
         while (cur != null) {
-            result.add(new Vec3d(cur.pos.getX() + 0.5, cur.pos.getY() + 1.0, cur.pos.getZ() + 0.5));
+            result.add(new Vec3d(cur.pos.getX() + 0.5, cur.pos.getY(), cur.pos.getZ() + 0.5));
             cur = cur.parent;
         }
         Collections.reverse(result);

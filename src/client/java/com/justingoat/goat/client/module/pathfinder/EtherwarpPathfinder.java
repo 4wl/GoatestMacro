@@ -1,11 +1,11 @@
 package com.justingoat.goat.client.module.pathfinder;
 
 import com.justingoat.goat.client.utils.InputUtils;
-import com.justingoat.goat.client.utils.RotationUtils;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.item.ItemStack;
+import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.text.Text;
@@ -17,7 +17,14 @@ public class EtherwarpPathfinder {
 
     public enum State { IDLE, SEARCHING, PREPARING, EXECUTING, DONE, FAILED }
 
+    // Per-hop phases: EQUIP→AIM→INTERACT→COOLDOWN
+    // Separating AIM and INTERACT by 1 tick ensures the rotation packet
+    // (sent in player.tick/sendMovementPackets) reaches the server
+    // BEFORE the interaction packet.
+    private enum HopPhase { EQUIP, AIM, INTERACT, COOLDOWN }
+
     private State state = State.IDLE;
+    private HopPhase hopPhase = HopPhase.EQUIP;
     private List<BlockPos> hopPositions;
     private List<float[]> hopAngles;
     private int currentHop;
@@ -28,7 +35,7 @@ public class EtherwarpPathfinder {
 
     private static final int MAX_RETRIES = 5;
     private static final int PREPARE_TICKS = 3;
-    private static final int WAIT_AFTER_HOP = 6;
+    private static final int COOLDOWN_TICKS = 6;
     private static final int MAX_SEARCH_ITERATIONS = 50000;
     private static final float YAW_STEP = 5.0f;
     private static final float PITCH_STEP = 4.0f;
@@ -80,6 +87,7 @@ public class EtherwarpPathfinder {
             restoreState();
         }
         state = State.IDLE;
+        hopPhase = HopPhase.EQUIP;
         hopPositions = null;
         hopAngles = null;
         goal = null;
@@ -123,6 +131,7 @@ public class EtherwarpPathfinder {
         this.hopAngles = result.angles;
         this.currentHop = 0;
         this.waitTicks = PREPARE_TICKS;
+        this.hopPhase = HopPhase.EQUIP;
         this.state = State.PREPARING;
         renderHops = result.positions;
         renderCurrentHop = 0;
@@ -145,7 +154,7 @@ public class EtherwarpPathfinder {
         waitTicks--;
         if (waitTicks <= 0) {
             state = State.EXECUTING;
-            waitTicks = 0;
+            hopPhase = HopPhase.AIM;
         }
     }
 
@@ -167,35 +176,43 @@ public class EtherwarpPathfinder {
             return;
         }
 
-        // Waiting after a hop
-        if (waitTicks > 0) {
-            waitTicks--;
-            InputUtils.setSneak(true);
-
-            // Check if we arrived at current hop early
-            if (currentHop > 0 && isAtPosition(player, hopPositions.get(currentHop - 1))) {
-                waitTicks = 0;
-            }
-            return;
-        }
-
-        // Ensure AOTV held
-        int slot = findAotvSlot(player);
-        if (slot < 0) { fail("Lost AOTV/AOTE"); return; }
-        InputUtils.setHotbarSlot(slot);
         InputUtils.setSneak(true);
 
-        // Set rotation and click
-        float[] angle = hopAngles.get(currentHop);
-        applyInstantRotation(player, angle[0], angle[1]);
-        InputUtils.setUse(true);
-
-        renderCurrentHop = currentHop;
-        currentHop++;
-        waitTicks = WAIT_AFTER_HOP;
-
-        // Release use next tick (via wait loop)
-        MinecraftClient.getInstance().execute(() -> InputUtils.setUse(false));
+        switch (hopPhase) {
+            case EQUIP -> {
+                int slot = findAotvSlot(player);
+                if (slot < 0) { fail("Lost AOTV/AOTE"); return; }
+                InputUtils.setHotbarSlot(slot);
+                hopPhase = HopPhase.AIM;
+            }
+            case AIM -> {
+                // Set rotation directly — no GCD snapping, we need precision
+                float[] angle = hopAngles.get(currentHop);
+                player.setYaw(angle[0]);
+                player.setPitch(MathHelper.clamp(angle[1], -90, 90));
+                // Next tick: player.tick() sends this rotation to server via sendMovementPackets
+                hopPhase = HopPhase.INTERACT;
+            }
+            case INTERACT -> {
+                // By now the rotation packet has been sent to the server
+                if (client.interactionManager != null) {
+                    client.interactionManager.interactItem(player, Hand.MAIN_HAND);
+                }
+                renderCurrentHop = currentHop;
+                currentHop++;
+                waitTicks = COOLDOWN_TICKS;
+                hopPhase = HopPhase.COOLDOWN;
+            }
+            case COOLDOWN -> {
+                waitTicks--;
+                if (currentHop > 0 && isAtPosition(player, hopPositions.get(currentHop - 1))) {
+                    waitTicks = 0;
+                }
+                if (waitTicks <= 0) {
+                    hopPhase = HopPhase.EQUIP;
+                }
+            }
+        }
     }
 
     private void fail(String reason) {
@@ -211,7 +228,6 @@ public class EtherwarpPathfinder {
         }
         originalSlot = -1;
         InputUtils.setSneak(false);
-        InputUtils.setUse(false);
         InputUtils.releaseAll();
         renderHops = null;
         renderCurrentHop = -1;
@@ -256,22 +272,6 @@ public class EtherwarpPathfinder {
         return -1;
     }
 
-    private static final float SENSITIVITY = 0.25f;
-    private static final float GCD;
-    static {
-        float f = SENSITIVITY * 0.6f + 0.2f;
-        GCD = f * f * f * 8.0f;
-    }
-
-    private static void applyInstantRotation(ClientPlayerEntity player, float targetYaw, float targetPitch) {
-        float yawDelta = MathHelper.wrapDegrees(targetYaw - player.getYaw());
-        float pitchDelta = targetPitch - player.getPitch();
-        yawDelta = Math.round(yawDelta / GCD) * GCD;
-        pitchDelta = Math.round(pitchDelta / GCD) * GCD;
-        player.setYaw(player.getYaw() + yawDelta);
-        player.setPitch(MathHelper.clamp(player.getPitch() + pitchDelta, -90, 90));
-    }
-
     private static void message(String msg) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player != null) {
@@ -302,7 +302,6 @@ public class EtherwarpPathfinder {
                 return reconstructPath(world, current);
             }
 
-            // Check if we're close enough (within 2 blocks horizontally)
             if (Math.abs(current.pos.getX() - goal.getX()) <= 1
                 && Math.abs(current.pos.getZ() - goal.getZ()) <= 1
                 && Math.abs(current.pos.getY() - goal.getY()) <= 2) {
@@ -313,7 +312,6 @@ public class EtherwarpPathfinder {
             double eyeY = EtherwarpRaycast.eyeY(current.pos);
             double eyeZ = EtherwarpRaycast.eyeZ(current.pos);
 
-            // Goal direction for focused scanning
             double gdx = goal.getX() - current.pos.getX();
             double gdz = goal.getZ() - current.pos.getZ();
             float goalYaw = (float) -Math.toDegrees(Math.atan2(gdx, gdz));
@@ -355,8 +353,7 @@ public class EtherwarpPathfinder {
         List<BlockPos> positions = new ArrayList<>();
         List<float[]> angles = new ArrayList<>();
 
-        // Re-compute precise angles for each hop
-        BlockPos prevPos = cur.pos; // start position
+        BlockPos prevPos = cur.pos;
         for (ENode node : nodes) {
             double eyeX = EtherwarpRaycast.eyeX(prevPos);
             double eyeY = EtherwarpRaycast.eyeY(prevPos);
