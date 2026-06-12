@@ -27,6 +27,11 @@ public class RotationFailsafe extends Failsafe {
             return;
         }
 
+        if (!FailsafeManager.getInstance().isAnyMacroActive()) {
+            initialized = false;
+            return;
+        }
+
         if (isMacroControllingRotation()) {
             lastYaw = client.player.getYaw();
             lastPitch = client.player.getPitch();

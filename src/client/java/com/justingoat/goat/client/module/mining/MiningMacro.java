@@ -24,7 +24,7 @@ public class MiningMacro extends GoatModule {
     private final RotationUtils rotationHelper = new RotationUtils();
 
     public MiningMacro() {
-        super("MiningBot", ModuleCategory.WORLD, false);
+        super("MiningBot", ModuleCategory.MACRO, false);
         miningType = addMode("Type", "Mithril", "Mithril", "Gemstone", "Ore");
         movement = addBoolean("Movement", true);
         tickGlide = addBoolean("TickGlide", true);

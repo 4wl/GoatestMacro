@@ -11,11 +11,13 @@ import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.failsafe.impl.*;
 import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import net.fabricmc.loader.api.FabricLoader;
 
 public class FailsafeManager {
     private static final FailsafeManager INSTANCE = new FailsafeManager();
     private final List<Failsafe> failsafes = new ArrayList<>();
     private final List<Failsafe> emergencyQueue = new ArrayList<>();
+    private final FailsafeReactionController reactionController = new FailsafeReactionController();
     private boolean hasEmergency = false;
     private Failsafe activeFailsafe = null;
     private long emergencyStartTime = 0;
@@ -45,6 +47,8 @@ public class FailsafeManager {
                 failsafe.onTick();
             }
             processEmergencyQueue();
+        } else {
+            reactionController.tick();
         }
     }
 
@@ -67,13 +71,13 @@ public class FailsafeManager {
 
         InputUtils.releaseAll();
         disableAllMacros();
+        reactionController.start(activeFailsafe);
     }
 
     private void disableAllMacros() {
         for (GoatModule module : ModuleManager.getModules()) {
             if (!module.isEnabled()) continue;
-            ModuleCategory cat = module.getCategory();
-            if (cat == ModuleCategory.COMBAT || cat == ModuleCategory.MOVEMENT) {
+            if (module.getCategory() == ModuleCategory.MACRO) {
                 module.setEnabled(false);
             }
         }
@@ -82,8 +86,7 @@ public class FailsafeManager {
     public boolean isAnyMacroActive() {
         for (GoatModule module : ModuleManager.getModules()) {
             if (!module.isEnabled()) continue;
-            ModuleCategory cat = module.getCategory();
-            if (cat == ModuleCategory.COMBAT || cat == ModuleCategory.MOVEMENT) {
+            if (module.getCategory() == ModuleCategory.MACRO) {
                 return true;
             }
         }
@@ -98,11 +101,29 @@ public class FailsafeManager {
         return activeFailsafe;
     }
 
+    public boolean isReactionActive() {
+        return reactionController.isActive();
+    }
+
+    public boolean triggerDevEmergency(String failsafeName) {
+        if (!FabricLoader.getInstance().isDevelopmentEnvironment()) return false;
+
+        for (Failsafe failsafe : failsafes) {
+            if (failsafe.getName().equalsIgnoreCase(failsafeName)
+                || failsafe.getClass().getSimpleName().equalsIgnoreCase(failsafeName)) {
+                triggerEmergency(failsafe);
+                return true;
+            }
+        }
+        return false;
+    }
+
     public void reset() {
         hasEmergency = false;
         activeFailsafe = null;
         emergencyStartTime = 0;
         emergencyQueue.clear();
+        reactionController.stop();
         for (Failsafe failsafe : failsafes) {
             failsafe.reset();
         }

@@ -5,6 +5,7 @@ import com.justingoat.goat.client.gui.GoatMacroScreen;
 import com.justingoat.goat.client.gui.MacroHudRenderer;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
+import com.justingoat.goat.client.module.failsafe.FailsafeTestCommand;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -70,6 +71,8 @@ public class GoatClient implements ClientModInitializer {
         });
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
+            FailsafeTestCommand.register(dispatcher);
+
             dispatcher.register(ClientCommandManager.literal("goto")
                 .then(ClientCommandManager.argument("x", IntegerArgumentType.integer())
                     .then(ClientCommandManager.argument("y", IntegerArgumentType.integer())

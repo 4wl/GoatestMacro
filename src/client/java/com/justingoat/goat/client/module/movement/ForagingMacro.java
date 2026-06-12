@@ -97,7 +97,7 @@ public class ForagingMacro extends GoatModule implements MacroHudInfo {
     );
 
     public ForagingMacro() {
-        super("ForagingMacro", ModuleCategory.MOVEMENT, false);
+        super("ForagingMacro", ModuleCategory.MACRO, false);
         logType = addMode("Log Type", "Dark Oak",
             "Dark Oak", "Oak", "Jungle", "Spruce", "Birch", "Acacia", "Cherry", "Mangrove", "Pale Oak", "Any");
         scanRadius = addNumber("Scan Radius", 30.0, 10.0, 50.0);

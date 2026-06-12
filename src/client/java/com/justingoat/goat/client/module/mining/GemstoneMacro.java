@@ -29,7 +29,7 @@ public class GemstoneMacro extends GoatModule {
     private final EtherwarpPathfinder etherwarp = new EtherwarpPathfinder();
 
     public GemstoneMacro() {
-        super("GemstoneMacro", ModuleCategory.WORLD, false);
+        super("GemstoneMacro", ModuleCategory.MACRO, false);
         ruby = addBoolean("Ruby", true);
         sapphire = addBoolean("Sapphire", true);
         amethyst = addBoolean("Amethyst", true);

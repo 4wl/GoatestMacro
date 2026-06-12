@@ -38,7 +38,7 @@ public class PowderMacro extends GoatModule {
     }
 
     public PowderMacro() {
-        super("PowderMacro", ModuleCategory.WORLD, false);
+        super("PowderMacro", ModuleCategory.MACRO, false);
         height = addNumber("Height", 8, 1, 30);
         width = addNumber("Width", 12, 1, 30);
         speed = addNumber("Speed", 4, 1, 20);

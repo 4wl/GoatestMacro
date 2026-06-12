@@ -38,7 +38,7 @@ public class PathfinderTest extends GoatModule {
     public EtherwarpPathfinder getEtherwarpPathfinder() { return etherwarpPathfinder; }
 
     public PathfinderTest() {
-        super("Pathfinder", ModuleCategory.MOVEMENT, false);
+        super("Pathfinder", ModuleCategory.MACRO, false);
         mode = addMode("Mode", "Walk", "Walk", "Fly", "Etherwarp");
         maxNodes = addNumber("MaxNodes", 100000, 10000, 500000);
         maxDrop = addNumber("MaxDrop", 3, 1, 3);

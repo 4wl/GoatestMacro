@@ -1,6 +1,7 @@
 package com.justingoat.goat.client.module;
 
 public enum ModuleCategory {
+    MACRO("Macro", "A"),
     COMBAT("Combat", "C"),
     MOVEMENT("Movement", "M"),
     RENDER("Render", "R"),

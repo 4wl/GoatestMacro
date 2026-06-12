@@ -23,6 +23,11 @@ public class WorldChangeFailsafe extends Failsafe {
             return;
         }
 
+        if (!FailsafeManager.getInstance().isAnyMacroActive()) {
+            lastWorldName = null;
+            return;
+        }
+
         String currentWorld = client.world.getRegistryKey().getValue().toString();
         
         if (lastWorldName == null) {

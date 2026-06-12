@@ -34,7 +34,7 @@ public class OreMacro extends GoatModule {
     private final EtherwarpPathfinder etherwarp = new EtherwarpPathfinder();
 
     public OreMacro() {
-        super("OreMacro", ModuleCategory.WORLD, false);
+        super("OreMacro", ModuleCategory.MACRO, false);
         coal = addBoolean("Coal", true);
         quartz = addBoolean("Quartz", true);
         iron = addBoolean("Iron", true);

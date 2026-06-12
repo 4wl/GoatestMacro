@@ -44,7 +44,7 @@ public class NukerMacro extends GoatModule {
     private int tickCounter = 0;
 
     public NukerMacro() {
-        super("Nuker", ModuleCategory.WORLD, false);
+        super("Nuker", ModuleCategory.MACRO, false);
         targetMode = addMode("TargetMode", "Random", "Random", "Closest", "Lowest", "Highest");
         customReach = addNumber("Reach", 4.5, 3.0, 6.0);
         onGroundDelay = addNumber("OnGroundDelay", 1, 1, 20);

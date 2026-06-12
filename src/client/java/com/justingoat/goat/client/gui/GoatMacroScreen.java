@@ -51,7 +51,7 @@ public class GoatMacroScreen extends Screen {
 
     private static int windowX = -1;
     private static int windowY = -1;
-    private static ModuleCategory selectedCategory = ModuleCategory.COMBAT;
+    private static ModuleCategory selectedCategory = ModuleCategory.MACRO;
     private static GoatModule selectedModule;
     private static int moduleScroll;
     private static int valueScroll;
@@ -149,7 +149,7 @@ public class GoatMacroScreen extends Screen {
         for (ModuleCategory category : ModuleCategory.values()) {
             if (isInside(mouseX, mouseY, sx + 8, categoryY, SIDEBAR_WIDTH - 16, 24)) {
                 selectedCategory = category;
-                selectedModule = category == ModuleCategory.SETTINGS ? ModuleManager.findByName("ClientSettings") : null;
+                selectedModule = null;
                 moduleScroll = 0;
                 valueScroll = 0;
                 expandedMode = null;

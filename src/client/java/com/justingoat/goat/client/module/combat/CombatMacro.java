@@ -109,7 +109,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     // ═══════════════════════════════════════════════════ Constructor
 
     public CombatMacro() {
-        super("CombatMacro", ModuleCategory.COMBAT, false);
+        super("CombatMacro", ModuleCategory.MACRO, false);
 
         scanRadius       = addNumber("ScanRadius", 40.0, 5.0, 60.0);
         attackRange      = addNumber("AttackRange", 3.0, 2.5, 6.0);

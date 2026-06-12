@@ -40,7 +40,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     private final Random random = new Random();
 
     public FarmingMacro() {
-        super("FarmingMacro", ModuleCategory.MOVEMENT, false);
+        super("FarmingMacro", ModuleCategory.MACRO, false);
         holdAttack = addBoolean("Hold Attack", true);
         delayMin = addNumber("Delay Min (ms)", 50.0, 0.0, 500.0);
         delayMax = addNumber("Delay Max (ms)", 150.0, 0.0, 500.0);

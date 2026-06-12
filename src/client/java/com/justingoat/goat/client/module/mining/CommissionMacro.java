@@ -43,7 +43,7 @@ public class CommissionMacro extends GoatModule {
             Pattern.compile("^\\s*(.+?):\\s*(\\d+\\.?\\d*%|DONE)\\s*$");
 
     public CommissionMacro() {
-        super("CommissionMacro", ModuleCategory.WORLD, false);
+        super("CommissionMacro", ModuleCategory.MACRO, false);
         avoidanceRadius = addNumber("AvoidRadius", 10, 0, 30);
         weaponSlot = addNumber("WeaponSlot", 1, 1, 8);
 

@@ -18,6 +18,8 @@ import com.justingoat.goat.client.module.mining.CommissionMacro;
 import com.justingoat.goat.client.module.render.CustomFOV;
 import com.justingoat.goat.client.module.render.FullBright;
 import com.justingoat.goat.client.module.render.TimeChanger;
+import com.justingoat.goat.client.module.settings.RotationSettings;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 
 public final class ModuleManager {
@@ -91,6 +93,10 @@ public final class ModuleManager {
             .bool("ScreenAnimation", true)
             .mode("Theme", "Light", "Light", "Dark")
             .build());
+        register(new RotationSettings());
+        if (FabricLoader.getInstance().isDevelopmentEnvironment()) {
+            register(new GoatModule("FailsafeTestMacro", ModuleCategory.MACRO, false));
+        }
     }
 
     public static List<GoatModule> getModules() {
