@@ -86,6 +86,10 @@ public class PathfinderTest extends GoatModule {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return;
 
+        mode.setValue("Walk");
+        flyProcessor.stop();
+        etherwarpPathfinder.cancel();
+
         BlockPos start = client.player.getBlockPos().down();
         client.player.sendMessage(
             Text.literal("§7[Goat] Calculating walk path to " + target.toShortString() + "..."), false);
@@ -116,6 +120,9 @@ public class PathfinderTest extends GoatModule {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return;
 
+        mode.setValue("Fly");
+        pathProcessor.stop();
+        etherwarpPathfinder.cancel();
         BlockPos start = client.player.getBlockPos();
         client.player.sendMessage(
             Text.literal("§7[Goat] Calculating fly path to " + target.toShortString() + "..."), false);
@@ -142,6 +149,9 @@ public class PathfinderTest extends GoatModule {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return;
 
+        mode.setValue("Etherwarp");
+        pathProcessor.stop();
+        flyProcessor.stop();
         this.setEnabled(true);
         etherwarpPathfinder.findPath(target);
     }

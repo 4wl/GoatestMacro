@@ -114,7 +114,7 @@ public class PathProcessor {
         // ── 1. Stuck detection (horizontal only) ────────────────────
         if (handleStuck(client, px, pz, settings)) return;
 
-        // ── 2. Waypoint arrival with DYNAMIC radius ─────────────────
+        // ── 2. Waypoint arrival ──────────────────────────────────
         PathNode curNode = path.get(currentIndex);
         Vec3d curCenter = nodeCenter(curNode);
         double hDistSqCur = hDistSq(px, pz, curCenter.x, curCenter.z);
@@ -125,11 +125,11 @@ public class PathProcessor {
         PathNode.MoveType curMoveType = curNode.getMoveType();
         if (currentIndex == path.size() - 1) {
             reach = 0.35;
-        } else if (curMoveType != PathNode.MoveType.WALK) {
-            reach = 1.0;
+        } else if (curMoveType == PathNode.MoveType.DROP || curMoveType == PathNode.MoveType.CLIMB) {
+            reach = 0.8;
         } else {
             double turnAngle = getTurnAngle(currentIndex);
-            reach = baseReach + (turnAngle / Math.PI) * 2.3;
+            reach = baseReach + (turnAngle / Math.PI) * 1.8;
         }
 
         if (hDistSqCur < reach * reach && vDistCur < 1.5) {
@@ -150,15 +150,28 @@ public class PathProcessor {
 
         float aimYaw = calcYaw(px, pz, aimCenter.x, aimCenter.z);
 
-        // Anticipatory cornering
-        if (currentIndex + 1 < path.size()) {
+        // Anticipatory cornering — only for WALK nodes, skip for jumps
+        boolean isJumpMove = moveType == PathNode.MoveType.STEP_UP
+            || moveType == PathNode.MoveType.JUMP_ACROSS;
+        if (!isJumpMove && currentIndex + 1 < path.size()) {
             double distToCur = Math.sqrt(hDistSq(px, pz, aimCenter.x, aimCenter.z));
-            if (distToCur < 3.5) {
-                Vec3d nextCenter = nodeCenter(path.get(currentIndex + 1));
-                float nextYaw = calcYaw(px, pz, nextCenter.x, nextCenter.z);
-                float blend = (float) (1.0 - distToCur / 3.5);
-                blend = blend * blend;
-                aimYaw = aimYaw + MathHelper.wrapDegrees(nextYaw - aimYaw) * blend * 0.6f;
+            if (distToCur < 4.0) {
+                // Blend toward the average direction of up to 3 upcoming nodes
+                float blendYaw = 0.0f;
+                int blendCount = 0;
+                int lookMax = Math.min(path.size(), currentIndex + 4);
+                for (int i = currentIndex + 1; i < lookMax; i++) {
+                    Vec3d nc = nodeCenter(path.get(i));
+                    float ny = calcYaw(px, pz, nc.x, nc.z);
+                    blendYaw += MathHelper.wrapDegrees(ny - aimYaw);
+                    blendCount++;
+                }
+                if (blendCount > 0) {
+                    float avgDelta = blendYaw / blendCount;
+                    float blend = (float) (1.0 - distToCur / 4.0);
+                    blend = blend * blend * 0.5f;
+                    aimYaw = aimYaw + avgDelta * blend;
+                }
             }
         }
 
@@ -203,26 +216,38 @@ public class PathProcessor {
 
         // ── 6. Jump logic ───────────────────────────────────────────
         boolean shouldJump = false;
-        if (moveType == PathNode.MoveType.STEP_UP) {
-            shouldJump = true;
-        } else if (moveType == PathNode.MoveType.JUMP_ACROSS) {
-            shouldJump = true;
-        } else if (needsEarlyJump(client, px, py, pz)) {
-            shouldJump = true;
-        } else if (client.player.horizontalCollision && client.player.isOnGround()) {
-            shouldJump = true;
-        } else if (isJumpableObstacle(client)) {
-            shouldJump = true;
-        } else if (isInFluid(client)) {
-            shouldJump = true;
+        boolean slowForJump = false;
+
+        if (isJumpMove) {
+            double distToJumpTarget = Math.sqrt(hDistSqCur);
+
+            if (distToJumpTarget > 2.5) {
+                // Far from jump — walk normally, slow down as we approach
+            } else if (distToJumpTarget > 1.2) {
+                // Approaching jump zone — stop sprinting, walk toward target
+                slowForJump = true;
+            } else if (client.player.isOnGround()) {
+                // Close enough and on ground — jump + sprint
+                shouldJump = true;
+            }
+        }
+
+        if (!shouldJump) {
+            if (client.player.horizontalCollision && client.player.isOnGround()) {
+                shouldJump = true;
+            } else if (isJumpableObstacle(client)) {
+                shouldJump = true;
+            } else if (isInFluid(client)) {
+                shouldJump = true;
+            }
         }
         if (aote.shouldSuppressJump()) shouldJump = false;
         InputUtils.setJump(shouldJump);
 
         // ── 7. Sprint ───────────────────────────────────────────────
         boolean wantSprint = settings.canSprint()
-            && (moveType == PathNode.MoveType.WALK
-            || moveType == PathNode.MoveType.JUMP_ACROSS)
+            && moveType != PathNode.MoveType.CLIMB
+            && !slowForJump
             && stuckTicks < 5 && angleToTarget < 30.0f;
         InputUtils.setSprint(wantSprint);
     }
@@ -299,24 +324,6 @@ public class PathProcessor {
         return feetState.getBlock() instanceof FluidBlock
             || feetState.isOf(Blocks.WATER)
             || feetState.isOf(Blocks.LAVA);
-    }
-
-    // ───────────────────────────────────── early jump lookahead
-
-    private boolean needsEarlyJump(MinecraftClient client, double px, double py, double pz) {
-        if (path == null) return false;
-        int lookAhead = Math.min(currentIndex + 3, path.size());
-        for (int i = currentIndex + 1; i < lookAhead; i++) {
-            PathNode node = path.get(i);
-            PathNode.MoveType mt = node.getMoveType();
-            if (mt != PathNode.MoveType.STEP_UP && mt != PathNode.MoveType.JUMP_ACROSS) continue;
-            Vec3d nc = nodeCenter(node);
-            double hDist = Math.sqrt(hDistSq(px, pz, nc.x, nc.z));
-            if (hDist < 2.0 && client.player.isOnGround()) {
-                return true;
-            }
-        }
-        return false;
     }
 
     // ───────────────────────────── V5-inspired multi-stage recovery

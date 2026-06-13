@@ -29,7 +29,7 @@ public class GotoCommand extends Command {
 
         GoatModule module = ModuleManager.findByName("Pathfinder");
         if (module instanceof PathfinderTest pt) {
-            pt.pathTarget(target);
+            pt.pathTargetWalk(target);
             ChatUtils.sendSuccessMessage("Pathing to " + x + " " + y + " " + z);
         } else {
             ChatUtils.sendErrorMessage("Pathfinder module not found.");

@@ -12,6 +12,8 @@ import java.util.List;
 
 public class PathSmoother {
 
+    private static final int MAX_SKIP = 10;
+
     public static List<PathNode> smooth(List<PathNode> rawPath) {
         if (rawPath == null || rawPath.size() <= 2) return rawPath;
 
@@ -25,7 +27,8 @@ public class PathSmoother {
         while (current < rawPath.size() - 1) {
             int farthest = current + 1;
 
-            for (int probe = rawPath.size() - 1; probe > current + 1; probe--) {
+            int probeLimit = Math.min(rawPath.size() - 1, current + MAX_SKIP);
+            for (int probe = probeLimit; probe > current + 1; probe--) {
                 PathNode from = rawPath.get(current);
                 PathNode to = rawPath.get(probe);
 
@@ -42,7 +45,66 @@ public class PathSmoother {
             current = farthest;
         }
 
-        return smoothed;
+        return addCornerNodes(smoothed);
+    }
+
+    private static List<PathNode> addCornerNodes(List<PathNode> path) {
+        if (path.size() <= 2) return path;
+
+        List<PathNode> result = new ArrayList<>();
+        result.add(path.get(0));
+
+        for (int i = 1; i < path.size() - 1; i++) {
+            PathNode prev = path.get(i - 1);
+            PathNode cur = path.get(i);
+            PathNode next = path.get(i + 1);
+
+            if (cur.getMoveType() != PathNode.MoveType.WALK) {
+                result.add(cur);
+                continue;
+            }
+
+            double angle = turnAngle(prev.getPos(), cur.getPos(), next.getPos());
+            if (angle > Math.PI * 0.3) {
+                BlockPos cp = cur.getPos();
+                BlockPos pp = prev.getPos();
+                int mx = (cp.getX() + pp.getX()) / 2;
+                int mz = (cp.getZ() + pp.getZ()) / 2;
+                if (mx != cp.getX() || mz != cp.getZ()) {
+                    BlockPos mid = new BlockPos(mx, cp.getY(), mz);
+                    result.add(new PathNode(mid, PathNode.MoveType.WALK));
+                }
+            }
+
+            result.add(cur);
+
+            if (angle > Math.PI * 0.3) {
+                BlockPos cp = cur.getPos();
+                BlockPos np = next.getPos();
+                int mx = (cp.getX() + np.getX()) / 2;
+                int mz = (cp.getZ() + np.getZ()) / 2;
+                if (mx != cp.getX() || mz != cp.getZ()) {
+                    BlockPos mid = new BlockPos(mx, cp.getY(), mz);
+                    result.add(new PathNode(mid, PathNode.MoveType.WALK));
+                }
+            }
+        }
+
+        result.add(path.get(path.size() - 1));
+        return result;
+    }
+
+    private static double turnAngle(BlockPos prev, BlockPos cur, BlockPos next) {
+        double d1x = cur.getX() - prev.getX();
+        double d1z = cur.getZ() - prev.getZ();
+        double d2x = next.getX() - cur.getX();
+        double d2z = next.getZ() - cur.getZ();
+        double len1 = Math.sqrt(d1x * d1x + d1z * d1z);
+        double len2 = Math.sqrt(d2x * d2x + d2z * d2z);
+        if (len1 < 0.01 || len2 < 0.01) return 0;
+        double dot = d1x * d2x + d1z * d2z;
+        double cosAngle = Math.max(-1.0, Math.min(1.0, dot / (len1 * len2)));
+        return Math.acos(cosAngle);
     }
 
     private static boolean hasLineOfWalk(MinecraftClient client, BlockPos from, BlockPos to) {

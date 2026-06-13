@@ -2,6 +2,7 @@ package com.justingoat.goat.client.module.pathfinder;
 
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.combat.CombatMacro;
+import com.justingoat.goat.client.module.farming.PestCleaner;
 import com.justingoat.goat.client.module.mining.MiningMacro;
 import com.justingoat.goat.client.module.mining.MiningBot;
 import com.justingoat.goat.client.module.mining.MiningTarget;
@@ -55,6 +56,9 @@ public class PathRenderer {
     private static final float[] COLOR_ETHERWARP_CUR   = {1.0f, 1.0f, 0.2f, 1.0f};
     private static final float[] COLOR_MINING_TARGET   = {0.0f, 1.0f, 0.9f, 1.0f};
     private static final float[] COLOR_MINING_CANDIDATE = {0.0f, 0.7f, 0.6f, 0.35f};
+    private static final float[] COLOR_PEST_ESP        = {1.0f, 0.4f, 0.1f, 0.75f};
+    private static final float[] COLOR_PEST_TARGET     = {1.0f, 0.1f, 0.1f, 1.0f};
+    private static final float[] COLOR_PEST_TRACER     = {1.0f, 0.5f, 0.2f, 0.5f};
 
     private static final float NODE_SIZE = 0.15f;
     private static final float CURRENT_SIZE = 0.22f;
@@ -69,6 +73,8 @@ public class PathRenderer {
         BlockPos foragingTarget = null;
         LivingEntity combatTarget = null;
         MiningBot miningBot = null;
+        List<PestCleaner.PestInfo> pests = null;
+        PestCleaner.PestInfo pestTarget = null;
         boolean shouldRender = false;
 
         if (module instanceof PathfinderTest pt && module.isEnabled() && pt.shouldRenderPath()) {
@@ -99,12 +105,21 @@ public class PathRenderer {
             }
         }
 
+        pests = PestCleaner.getRenderPests();
+        pestTarget = PestCleaner.getRenderTarget();
+        if (pests != null || pestTarget != null) shouldRender = true;
+
+        List<Vec3d> flyPath = FlyPathProcessor.getRenderPath();
+        List<BlockPos> ethHops = EtherwarpPathfinder.getRenderHops();
+        if (flyPath != null || ethHops != null) shouldRender = true;
+
         if (!shouldRender) return;
         List<PathNode> path = processor == null ? null : processor.getPath();
         int curIdx = processor == null ? 0 : processor.getCurrentIndex();
         boolean hasPath = processor != null && !processor.isDone()
             && path != null && !path.isEmpty() && curIdx < path.size();
-        if (!hasPath && foragingTarget == null && combatTarget == null && miningBot == null) return;
+        if (!hasPath && foragingTarget == null && combatTarget == null && miningBot == null
+            && flyPath == null && ethHops == null && pests == null && pestTarget == null) return;
 
         MatrixStack matrices = context.matrices();
         VertexConsumerProvider consumers = context.consumers();
@@ -196,7 +211,6 @@ public class PathRenderer {
         }
 
         // --- Fly path rendering ---
-        List<Vec3d> flyPath = FlyPathProcessor.getRenderPath();
         if (flyPath != null && flyPath.size() >= 2) {
             int flyIdx = FlyPathProcessor.getRenderIndex();
             int flyMax = Math.min(flyPath.size(), flyIdx + 60);
@@ -223,7 +237,6 @@ public class PathRenderer {
         }
 
         // --- Etherwarp path rendering ---
-        List<BlockPos> ethHops = EtherwarpPathfinder.getRenderHops();
         if (ethHops != null && !ethHops.isEmpty()) {
             int curHop = EtherwarpPathfinder.getRenderCurrentHop();
             for (int i = 0; i < ethHops.size() - 1; i++) {
@@ -275,6 +288,40 @@ public class PathRenderer {
                     p.getX(), p.getY(), p.getZ(),
                     p.getX() + 1.0f, p.getY() + 1.0f, p.getZ() + 1.0f,
                     c[0], c[1], c[2], c[3]);
+            }
+        }
+
+        // --- Pest ESP rendering ---
+        if (pests != null) {
+            MinecraftClient mc = MinecraftClient.getInstance();
+            Vec3d playerEye = mc.player != null ? mc.player.getEyePos() : cam;
+
+            for (PestCleaner.PestInfo pest : pests) {
+                if (pest.nameTag.isRemoved()) continue;
+                Vec3d pp = pest.pestPos;
+                boolean isTarget = pestTarget != null && pest.nameTag.getId() == pestTarget.nameTag.getId();
+                float[] c = isTarget ? COLOR_PEST_TARGET : COLOR_PEST_ESP;
+                float s = isTarget ? 0.35f : 0.25f;
+
+                drawWireBox(lineBuffer, posMatrix, entry,
+                    (float) pp.x - s, (float) pp.y, (float) pp.z - s,
+                    (float) pp.x + s, (float) pp.y + 2.0f, (float) pp.z + s,
+                    c[0], c[1], c[2], c[3]);
+
+                // Tracer line from player to pest
+                float[] tc = COLOR_PEST_TRACER;
+                float tx = (float) playerEye.x, ty = (float) playerEye.y, tz = (float) playerEye.z;
+                float px = (float) pp.x, py = (float) pp.y + 1.0f, pz = (float) pp.z;
+                float dx = px - tx, dy = py - ty, dz = pz - tz;
+                float len = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+                if (len > 0.01f) {
+                    lineBuffer.vertex(posMatrix, tx, ty, tz)
+                        .color(tc[0], tc[1], tc[2], tc[3])
+                        .normal(entry, dx / len, dy / len, dz / len).lineWidth(1.5f);
+                    lineBuffer.vertex(posMatrix, px, py, pz)
+                        .color(tc[0], tc[1], tc[2], tc[3])
+                        .normal(entry, dx / len, dy / len, dz / len).lineWidth(1.5f);
+                }
             }
         }
 

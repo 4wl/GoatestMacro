@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.List;
 
 import com.justingoat.goat.client.module.combat.CombatMacro;
+import com.justingoat.goat.client.module.farming.PestCleaner;
 import com.justingoat.goat.client.module.movement.AutoSprint;
 import com.justingoat.goat.client.module.movement.FarmingMacro;
 import com.justingoat.goat.client.module.movement.ForagingMacro;
@@ -18,6 +19,7 @@ import com.justingoat.goat.client.module.mining.CommissionMacro;
 import com.justingoat.goat.client.module.render.CustomFOV;
 import com.justingoat.goat.client.module.render.FullBright;
 import com.justingoat.goat.client.module.render.TimeChanger;
+import com.justingoat.goat.client.module.settings.FailsafeSettings;
 import com.justingoat.goat.client.module.settings.RotationSettings;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
@@ -28,6 +30,7 @@ public final class ModuleManager {
     static {
         registerCombatModules();
         registerMovementModules();
+        registerFarmingModules();
         registerMiningModules();
         registerRenderModules();
         registerSettingsModules();
@@ -62,6 +65,10 @@ public final class ModuleManager {
         register(new PathfinderTest());
     }
 
+    private static void registerFarmingModules() {
+        register(new PestCleaner());
+    }
+
     private static void registerMiningModules() {
         register(new MiningMacro());
         register(new NukerMacro());
@@ -94,6 +101,7 @@ public final class ModuleManager {
             .mode("Theme", "Light", "Light", "Dark")
             .build());
         register(new RotationSettings());
+        register(new FailsafeSettings());
         if (FabricLoader.getInstance().isDevelopmentEnvironment()) {
             register(new GoatModule("FailsafeTestMacro", ModuleCategory.MACRO, false));
         }

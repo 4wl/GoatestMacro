@@ -28,7 +28,7 @@ public class RotationInterpolator {
         if (activeRotation == null || !activeRotation.isActive()) return;
 
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player == null) return;
+        if (client.player == null || client.currentScreen != null) return;
 
         float partialTick = client.getRenderTickCounter().getTickProgress(false);
 

@@ -41,10 +41,16 @@ public class FailsafeManager {
         return INSTANCE;
     }
 
+    public List<Failsafe> getFailsafes() {
+        return failsafes;
+    }
+
     public void tick() {
         if (!hasEmergency) {
             for (Failsafe failsafe : failsafes) {
-                failsafe.onTick();
+                if (failsafe.isEnabled()) {
+                    failsafe.onTick();
+                }
             }
             processEmergencyQueue();
         } else {

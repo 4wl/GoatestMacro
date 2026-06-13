@@ -268,18 +268,33 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
         }
 
         double dist = client.player.distanceTo(currentTarget);
+        Vec3d eyePos = client.player.getEyePos();
+        Vec3d targetCenter = getTargetCenter(currentTarget);
+        boolean hasLOS = RaytraceUtils.isLineClear(client.world, eyePos, targetCenter, null);
 
-        // Within attack range → transition to ATTACKING
-        if (dist <= attackRange.getValue()) {
+        // Within attack range AND has line of sight → transition to ATTACKING
+        if (dist <= attackRange.getValue() && hasLOS) {
             abortPursuit();
             state = State.ATTACKING;
             initRotationForTarget(client);
             return;
         }
 
+        // No LOS → always use pathfinder to navigate around obstacles
+        if (!hasLOS) {
+            if (pathProcessor.getPath() != null && !pathProcessor.isDone()) {
+                tickFarPursuit(client);
+            } else if (!pathing) {
+                requestRepath(client, currentTarget.getBlockPos().down());
+            } else {
+                InputUtils.releaseAll();
+            }
+            return;
+        }
+
         double closeRange = attackRange.getValue() + 3.0;
 
-        // If A* path is active, follow it until close enough for direct strafe
+        // Has LOS — use normal close/far pursuit
         if (pathProcessor.getPath() != null && !pathProcessor.isDone()) {
             if (dist <= closeRange) {
                 pathProcessor.stop();
@@ -289,7 +304,6 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
                 tickFarPursuit(client);
             }
         } else if (dist <= closeRange) {
-            // Close enough: direct strafe toward mob
             if (directStrafeStuckTicks >= STRAFE_STUCK_PATHFIND_THRESHOLD) {
                 directStrafeStuckTicks = 0;
                 requestRepath(client, currentTarget.getBlockPos().down());
@@ -297,7 +311,6 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
                 tickDirectStrafe(client, dist);
             }
         } else {
-            // Far away with no path: request A* instead of walking blindly
             if (!pathing) {
                 requestRepath(client, currentTarget.getBlockPos().down());
             }
@@ -387,6 +400,15 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
 
     private void abortPursuit() {
         if (pathProcessor.getPath() != null) pathProcessor.stop();
+        if (rotation.isActive()) {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.player != null) {
+                client.player.setYaw(rotation.getCurrentYaw());
+                client.player.setPitch(rotation.getCurrentPitch());
+            }
+            rotation.clear();
+            RotationInterpolator.clearActive();
+        }
         InputUtils.releaseAll();
         directStrafeStuckTicks = 0;
     }
@@ -424,8 +446,15 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
             return;
         }
 
-        // Track target's bounding box center with Perlin jitter (handled by RotationUtils internally)
+        // Lost line of sight → back to pursuing (will pathfind around obstacle)
+        Vec3d eyePos = client.player.getEyePos();
         Vec3d targetCenter = getTargetCenter(currentTarget);
+        if (!RaytraceUtils.isLineClear(client.world, eyePos, targetCenter, null)) {
+            releaseAttackState();
+            state = State.PURSUING;
+            return;
+        }
+
         float[] look = RotationUtils.lookAt(
                 client.player.getX(), client.player.getEyeY(), client.player.getZ(),
                 targetCenter.x, targetCenter.y, targetCenter.z
@@ -507,6 +536,14 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.options != null) {
             client.options.useKey.setPressed(false);
+        }
+        if (rotation.isActive()) {
+            if (client.player != null) {
+                client.player.setYaw(rotation.getCurrentYaw());
+                client.player.setPitch(rotation.getCurrentPitch());
+            }
+            rotation.clear();
+            RotationInterpolator.clearActive();
         }
     }
 
@@ -592,7 +629,6 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     private LivingEntity findBestTarget(MinecraftClient client) {
         double radius = scanRadius.getValue();
         double radiusSq = radius * radius;
-        Vec3d eyePos = client.player.getEyePos();
 
         LivingEntity best = null;
         double bestDistSq = Double.MAX_VALUE;
@@ -603,9 +639,6 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
 
             double distSq = living.squaredDistanceTo(client.player.getX(), client.player.getY(), client.player.getZ());
             if (distSq > radiusSq) continue;
-
-            Vec3d targetCenter = getTargetCenter(living);
-            if (!RaytraceUtils.isLineClear(client.world, eyePos, targetCenter, null)) continue;
 
             if (distSq < bestDistSq) {
                 bestDistSq = distSq;
@@ -652,11 +685,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
 
         double distSq = entity.squaredDistanceTo(client.player.getX(), client.player.getY(), client.player.getZ());
         double maxRange = scanRadius.getValue() + 10.0;
-        if (distSq > maxRange * maxRange) return false;
-
-        Vec3d eyePos = client.player.getEyePos();
-        Vec3d targetCenter = getTargetCenter(entity);
-        return RaytraceUtils.isLineClear(client.world, eyePos, targetCenter, null);
+        return distSq <= maxRange * maxRange;
     }
 
     private boolean matchesMobFilter(String name) {
