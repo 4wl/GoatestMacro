@@ -3,10 +3,13 @@ package com.justingoat.goat.client.module.movement;
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.MacroHudInfo;
 import com.justingoat.goat.client.module.ModuleCategory;
+import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.ModeValue;
 import com.justingoat.goat.client.module.value.NumberValue;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
+import com.justingoat.goat.client.module.failsafe.impl.TeleportFailsafe;
+import com.justingoat.goat.client.module.farming.PestCleaner;
 import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
 import com.justingoat.goat.client.utils.RotationUtils;
@@ -45,7 +48,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         // S-Shape states: strafe A/D along row, W/S to switch lane
         S_NONE, S_LEFT, S_RIGHT, S_SWITCHING_LANE, S_DROPPING,
         // Shared
-        REWARP
+        PEST_CLEANING, REWARP
     }
 
     // ── Settings ──
@@ -187,6 +190,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             case S_SWITCHING_LANE -> tickSSwitchingLane(client);
             case S_DROPPING -> tickSDropping(client);
             // Shared
+            case PEST_CLEANING -> tickPestCleaning(client);
             case REWARP -> tickRewarp(client);
         }
     }
@@ -610,6 +614,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         }
 
         if (System.currentTimeMillis() >= warpDelay) {
+            markWarpCommand();
             client.player.networkHandler.sendChatCommand("warp garden");
             warpDelay = System.currentTimeMillis() + 5000;
         }
@@ -645,6 +650,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
                 setEnabled(false);
             } else {
                 ChatUtils.sendWarningMessage("Not near crop! Warping...");
+                markWarpCommand();
                 client.player.networkHandler.sendChatCommand("warp garden");
                 warping = true;
             }
@@ -842,16 +848,41 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
 
     private void checkRewarpTrigger(MinecraftClient client) {
         if (rewarpTriggerPoint == null || rewarpTriggered) return;
-        if (state == State.REWARP || state == State.WAITING) return;
+        if (state == State.REWARP || state == State.WAITING || state == State.PEST_CLEANING) return;
 
         if (isAtPoint(client, rewarpTriggerPoint, 1.5)) {
             rewarpTriggered = true;
-            debugMsg("Rewarp trigger reached at " + rewarpTriggerPoint.toShortString());
-            ChatUtils.sendInfoMessage("Rewarp trigger reached, warping...");
             InputUtils.releaseAll();
+
+            GoatModule pestModule = ModuleManager.findByName("PestCleaner");
+            if (pestModule != null) {
+                debugMsg("Rewarp trigger reached, running PestCleaner first...");
+                ChatUtils.sendInfoMessage("Rewarp trigger reached, cleaning pests first...");
+                pestModule.setEnabled(true);
+                state = State.PEST_CLEANING;
+            } else {
+                markWarpCommand();
+                ChatUtils.sendInfoMessage("Rewarp trigger reached, warping...");
+                client.player.networkHandler.sendChatCommand("warp garden");
+                state = State.REWARP;
+            }
+        }
+    }
+
+    private void tickPestCleaning(MinecraftClient client) {
+        GoatModule pestModule = ModuleManager.findByName("PestCleaner");
+        if (pestModule == null || !pestModule.isEnabled()) {
+            debugMsg("PestCleaner finished, rewarping...");
+            ChatUtils.sendInfoMessage("Pest cleaning done, warping...");
+            markWarpCommand();
             client.player.networkHandler.sendChatCommand("warp garden");
             state = State.REWARP;
         }
+    }
+
+    private void markWarpCommand() {
+        TeleportFailsafe tf = FailsafeManager.getInstance().getFailsafe(TeleportFailsafe.class);
+        if (tf != null) tf.markCommand();
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -882,6 +913,12 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     public BlockPos getStartPoint() { return startPoint; }
     public BlockPos getEndPoint() { return endPoint; }
     public BlockPos getRewarpTriggerPoint() { return rewarpTriggerPoint; }
+
+    public void loadSavedPoints(BlockPos startPoint, BlockPos endPoint, BlockPos rewarpTriggerPoint) {
+        this.startPoint = startPoint;
+        this.endPoint = endPoint;
+        this.rewarpTriggerPoint = rewarpTriggerPoint;
+    }
 
     // ── HUD ──
 

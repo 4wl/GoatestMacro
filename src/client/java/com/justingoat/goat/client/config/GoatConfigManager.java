@@ -13,6 +13,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleManager;
+import com.justingoat.goat.client.module.movement.FarmingMacro;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.KeybindValue;
 import com.justingoat.goat.client.module.value.ModeValue;
@@ -20,6 +21,7 @@ import com.justingoat.goat.client.module.value.ModuleValue;
 import com.justingoat.goat.client.module.value.NumberValue;
 
 import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.util.math.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,6 +88,7 @@ public final class GoatConfigManager {
                 }
             }
             moduleJson.add("values", values);
+            addModuleData(module, moduleJson);
             modules.add(module.getName(), moduleJson);
         }
 
@@ -119,6 +122,11 @@ public final class GoatConfigManager {
             if (values != null) {
                 applyValues(module, values);
             }
+
+            JsonObject data = getObject(moduleJson, "data");
+            if (data != null) {
+                applyModuleData(module, data);
+            }
         }
     }
 
@@ -151,5 +159,60 @@ public final class GoatConfigManager {
             return null;
         }
         return element.getAsJsonObject();
+    }
+
+    private static void addModuleData(GoatModule module, JsonObject moduleJson) {
+        if (module instanceof FarmingMacro farmingMacro) {
+            JsonObject data = new JsonObject();
+            addBlockPos(data, "startPoint", farmingMacro.getStartPoint());
+            addBlockPos(data, "endPoint", farmingMacro.getEndPoint());
+            addBlockPos(data, "rewarpTriggerPoint", farmingMacro.getRewarpTriggerPoint());
+            moduleJson.add("data", data);
+        }
+    }
+
+    private static void applyModuleData(GoatModule module, JsonObject data) {
+        if (module instanceof FarmingMacro farmingMacro) {
+            farmingMacro.loadSavedPoints(
+                readBlockPos(data, "startPoint"),
+                readBlockPos(data, "endPoint"),
+                readBlockPos(data, "rewarpTriggerPoint")
+            );
+        }
+    }
+
+    private static void addBlockPos(JsonObject object, String key, BlockPos pos) {
+        if (pos == null) {
+            return;
+        }
+
+        JsonObject posJson = new JsonObject();
+        posJson.addProperty("x", pos.getX());
+        posJson.addProperty("y", pos.getY());
+        posJson.addProperty("z", pos.getZ());
+        object.add(key, posJson);
+    }
+
+    private static BlockPos readBlockPos(JsonObject object, String key) {
+        JsonObject posJson = getObject(object, key);
+        if (posJson == null) {
+            return null;
+        }
+
+        JsonElement x = posJson.get("x");
+        JsonElement y = posJson.get("y");
+        JsonElement z = posJson.get("z");
+        if (!isNumber(x) || !isNumber(y) || !isNumber(z)) {
+            LOGGER.warn("Invalid BlockPos for {} in Goat config.", key);
+            return null;
+        }
+
+        return new BlockPos(x.getAsInt(), y.getAsInt(), z.getAsInt());
+    }
+
+    private static boolean isNumber(JsonElement element) {
+        return element != null
+            && element.isJsonPrimitive()
+            && element.getAsJsonPrimitive().isNumber();
     }
 }

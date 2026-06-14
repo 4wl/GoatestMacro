@@ -1,6 +1,7 @@
 package com.justingoat.goat.client.commands.impl;
 
 import com.justingoat.goat.client.commands.Command;
+import com.justingoat.goat.client.config.GoatConfigManager;
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.movement.FarmingMacro;
@@ -17,6 +18,7 @@ public class SetStartCommand extends Command {
         GoatModule module = ModuleManager.findByName("FarmingMacro");
         if (module instanceof FarmingMacro fm) {
             fm.setStartPoint(MinecraftClient.getInstance());
+            GoatConfigManager.save();
             ChatUtils.sendSuccessMessage("Farming start point set.");
         } else {
             ChatUtils.sendErrorMessage("FarmingMacro module not found.");

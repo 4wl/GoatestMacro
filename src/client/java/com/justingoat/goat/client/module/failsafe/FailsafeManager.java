@@ -6,6 +6,7 @@ import java.util.List;
 
 import com.justingoat.goat.client.events.EventManager;
 import com.justingoat.goat.client.module.GoatModule;
+import com.justingoat.goat.client.module.MacroScheduler;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.failsafe.impl.*;
@@ -21,6 +22,7 @@ public class FailsafeManager {
     private boolean hasEmergency = false;
     private Failsafe activeFailsafe = null;
     private long emergencyStartTime = 0;
+    private final List<String> disabledMacroNames = new ArrayList<>();
 
     private FailsafeManager() {
         register(new RotationFailsafe());
@@ -55,6 +57,17 @@ public class FailsafeManager {
             processEmergencyQueue();
         } else {
             reactionController.tick();
+            if (!reactionController.isActive()) {
+                List<String> toResume = new ArrayList<>(disabledMacroNames);
+                reset();
+                for (String name : toResume) {
+                    GoatModule module = ModuleManager.findByName(name);
+                    if (module != null) {
+                        ChatUtils.sendSuccessMessage("Auto-resuming " + name);
+                        module.setEnabled(true);
+                    }
+                }
+            }
         }
     }
 
@@ -81,9 +94,11 @@ public class FailsafeManager {
     }
 
     private void disableAllMacros() {
+        disabledMacroNames.clear();
         for (GoatModule module : ModuleManager.getModules()) {
             if (!module.isEnabled()) continue;
             if (module.getCategory() == ModuleCategory.MACRO) {
+                disabledMacroNames.add(module.getName());
                 module.setEnabled(false);
             }
         }
@@ -93,6 +108,10 @@ public class FailsafeManager {
         for (GoatModule module : ModuleManager.getModules()) {
             if (!module.isEnabled()) continue;
             if (module.getCategory() == ModuleCategory.MACRO) {
+                if (module instanceof MacroScheduler scheduler) {
+                    if (scheduler.isRunningTarget()) return true;
+                    continue;
+                }
                 return true;
             }
         }
@@ -124,11 +143,20 @@ public class FailsafeManager {
         return false;
     }
 
+    @SuppressWarnings("unchecked")
+    public <T extends Failsafe> T getFailsafe(Class<T> type) {
+        for (Failsafe failsafe : failsafes) {
+            if (type.isInstance(failsafe)) return (T) failsafe;
+        }
+        return null;
+    }
+
     public void reset() {
         hasEmergency = false;
         activeFailsafe = null;
         emergencyStartTime = 0;
         emergencyQueue.clear();
+        disabledMacroNames.clear();
         reactionController.stop();
         for (Failsafe failsafe : failsafes) {
             failsafe.reset();

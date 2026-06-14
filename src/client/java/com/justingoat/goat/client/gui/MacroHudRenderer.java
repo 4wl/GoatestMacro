@@ -1,5 +1,8 @@
 package com.justingoat.goat.client.gui;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.MacroHudInfo;
 import com.justingoat.goat.client.module.ModuleManager;
@@ -16,12 +19,11 @@ public final class MacroHudRenderer {
 
     private static final int X = 8;
     private static final int Y = 8;
-    private static final int WIDTH = 176;
-    private static final int HEIGHT = 52;
+    private static final int MIN_WIDTH = 176;
+    private static final int ROW_HEIGHT = 13;
     private static final int BACKGROUND = 0xAA101216;
     private static final int BORDER = 0xFF55D68A;
     private static final int TITLE = 0xFFFFFFFF;
-    private static final int LABEL = 0xFF8E98A8;
     private static final int VALUE = 0xFFE8EEF7;
 
     private MacroHudRenderer() {
@@ -38,24 +40,40 @@ public final class MacroHudRenderer {
         ActiveMacro active = findActiveMacro();
         if (active == null) return;
 
-        context.fill(X, Y, X + WIDTH, Y + HEIGHT, BACKGROUND);
-        context.fill(X, Y, X + 2, Y + HEIGHT, BORDER);
-        drawBorder(context, X, Y, WIDTH, HEIGHT, 0x6655D68A);
+        List<String> rows = new ArrayList<>();
+        rows.add("State: " + active.info.getHudState());
+        rows.addAll(active.info.getHudExtraLines());
+        rows.add("Runtime: " + formatDuration(active.module.getEnabledDurationMillis()));
 
-        context.drawText(client.textRenderer, Text.literal(active.info.getHudName() + " macro is active"), X + 8, Y + 7, TITLE, false);
-        context.drawText(client.textRenderer, Text.literal("State"), X + 8, Y + 23, LABEL, false);
-        context.drawText(client.textRenderer, Text.literal(active.info.getHudState()), X + 54, Y + 23, VALUE, false);
-        context.drawText(client.textRenderer, Text.literal("Runtime"), X + 8, Y + 36, LABEL, false);
-        context.drawText(client.textRenderer, Text.literal(formatDuration(active.module.getEnabledDurationMillis())), X + 54, Y + 36, VALUE, false);
+        String title = active.info.getHudName() + " macro is active";
+        int width = Math.max(MIN_WIDTH, client.textRenderer.getWidth(title) + 16);
+        for (String row : rows) {
+            width = Math.max(width, client.textRenderer.getWidth(row) + 16);
+        }
+        int height = 21 + rows.size() * ROW_HEIGHT + 6;
+
+        context.fill(X, Y, X + width, Y + height, BACKGROUND);
+        context.fill(X, Y, X + 2, Y + height, BORDER);
+        drawBorder(context, X, Y, width, height, 0x6655D68A);
+
+        context.drawText(client.textRenderer, Text.literal(title), X + 8, Y + 7, TITLE, false);
+        int rowY = Y + 23;
+        for (String row : rows) {
+            context.drawText(client.textRenderer, Text.literal(row), X + 8, rowY, VALUE, false);
+            rowY += ROW_HEIGHT;
+        }
     }
 
     private static ActiveMacro findActiveMacro() {
+        ActiveMacro best = null;
         for (GoatModule module : ModuleManager.getModules()) {
             if (module.isEnabled() && module instanceof MacroHudInfo info) {
-                return new ActiveMacro(module, info);
+                if (best == null || info.getHudPriority() > best.info.getHudPriority()) {
+                    best = new ActiveMacro(module, info);
+                }
             }
         }
-        return null;
+        return best;
     }
 
     private static String formatDuration(long millis) {

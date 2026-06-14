@@ -2,6 +2,7 @@ package com.justingoat.goat.client.commands.impl;
 
 import com.justingoat.goat.client.commands.Argument;
 import com.justingoat.goat.client.commands.Command;
+import com.justingoat.goat.client.config.GoatConfigManager;
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.movement.FarmingMacro;
@@ -25,11 +26,13 @@ public class SetRewarpCommand extends Command {
 
         if (args.length > 0 && args[0].equals("clear")) {
             fm.setRewarpTrigger(null);
+            GoatConfigManager.save();
             ChatUtils.sendSuccessMessage("Re-warp trigger cleared.");
         } else {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.player != null) {
                 fm.setRewarpTrigger(client.player.getBlockPos());
+                GoatConfigManager.save();
                 ChatUtils.sendSuccessMessage("Re-warp trigger set.");
             }
         }

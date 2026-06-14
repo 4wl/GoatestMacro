@@ -21,6 +21,7 @@ import com.justingoat.goat.client.module.render.FullBright;
 import com.justingoat.goat.client.module.render.TimeChanger;
 import com.justingoat.goat.client.module.settings.FailsafeSettings;
 import com.justingoat.goat.client.module.settings.RotationSettings;
+import com.justingoat.goat.client.module.skills.AutoExperiments;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 
@@ -32,6 +33,7 @@ public final class ModuleManager {
         registerMovementModules();
         registerFarmingModules();
         registerMiningModules();
+        registerSkillModules();
         registerRenderModules();
         registerSettingsModules();
     }
@@ -76,6 +78,11 @@ public final class ModuleManager {
         register(new GemstoneMacro());
         register(new PowderMacro());
         register(new CommissionMacro());
+    }
+
+    private static void registerSkillModules() {
+        register(new AutoExperiments());
+        register(new MacroScheduler());
     }
 
     private static void registerRenderModules() {
