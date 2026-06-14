@@ -36,4 +36,13 @@ public class MouseUtils {
         } catch (InterruptedException ignored) {}
         mouse.invokeOnMouseButton(windowHandle, input, GLFW.GLFW_RELEASE);
     }
+
+    public static void ungrabMouse() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.mouse == null || client.getWindow() == null) return;
+
+        if (!client.mouse.isCursorLocked()) return;
+        client.mouse.unlockCursor();
+        GLFW.glfwSetInputMode(client.getWindow().getHandle(), GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
+    }
 }

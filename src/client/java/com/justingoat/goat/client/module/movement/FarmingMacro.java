@@ -194,6 +194,11 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             return;
         }
 
+        if (state == State.PEST_CLEANING) {
+            tickPestCleaning(client);
+            return;
+        }
+
         rotation.tick();
         if (rotation.isActive()) {
             float[] interp = rotation.interpolate(1.0f);
@@ -643,27 +648,40 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             return;
         }
 
+        if (isHorizontallyAtPoint(client, startPoint, 1.0)) {
+            if (areChunksLoaded(client, startPoint)) {
+                resumeAfterRewarpWhenGrounded(client);
+            } else {
+                debugMsg("Waiting for chunks...");
+            }
+            return;
+        }
+
         if (System.currentTimeMillis() >= warpDelay) {
             markWarpCommand();
             client.player.networkHandler.sendChatCommand("warp garden");
             warpDelay = System.currentTimeMillis() + 5000;
         }
+    }
 
-        if (isAtPoint(client, startPoint, 1.0)) {
-            if (areChunksLoaded(client, startPoint)) {
-                warpDelay = null;
-                if (isVertical()) {
-                    movementKey = null;
-                    inAir = false;
-                    state = State.V_SCAN_FOR_CROP;
-                } else {
-                    changeLaneDir = null;
-                    sLayerY = client.player.getBlockPos().getY();
-                    state = State.S_NONE;
-                }
-            } else {
-                debugMsg("Waiting for chunks...");
-            }
+    private void resumeAfterRewarpWhenGrounded(MinecraftClient client) {
+        if (!client.player.isOnGround()) {
+            InputUtils.releaseAll();
+            InputUtils.setSneak(true);
+            InputUtils.setJump(false);
+            return;
+        }
+
+        InputUtils.setSneak(false);
+        warpDelay = null;
+        if (isVertical()) {
+            movementKey = null;
+            inAir = false;
+            state = State.V_SCAN_FOR_CROP;
+        } else {
+            changeLaneDir = null;
+            sLayerY = client.player.getBlockPos().getY();
+            state = State.S_NONE;
         }
     }
 
@@ -852,6 +870,12 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         return Math.sqrt(dx * dx + dy * dy + dz * dz) < minDist;
     }
 
+    private boolean isHorizontallyAtPoint(MinecraftClient client, BlockPos point, double minDist) {
+        double dx = client.player.getX() - (point.getX() + 0.5);
+        double dz = client.player.getZ() - (point.getZ() + 0.5);
+        return Math.sqrt(dx * dx + dz * dz) < minDist;
+    }
+
     private boolean areChunksLoaded(MinecraftClient client, BlockPos pos) {
         int chunkX = pos.getX() >> 4;
         int chunkZ = pos.getZ() >> 4;
@@ -883,6 +907,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         if (isAtPoint(client, rewarpTriggerPoint, 1.5)) {
             rewarpTriggered = true;
             InputUtils.releaseAll();
+            rotation.clear();
 
             GoatModule pestModule = ModuleManager.findByName("PestCleaner");
             if (pestModule instanceof PestCleaner) {

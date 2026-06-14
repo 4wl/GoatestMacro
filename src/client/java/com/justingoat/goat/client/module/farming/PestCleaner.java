@@ -26,6 +26,7 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.decoration.ArmorStandEntity;
 import net.minecraft.particle.ParticleTypes;
+import net.minecraft.particle.TrailParticleEffect;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
@@ -41,6 +42,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         IDLE,
         SCANNING,
         WARP_TO_PLOT,
+        SEARCH_PLOT,
         ACTIVATE_TRACKER,
         FOLLOW_TRACKER_TRAIL,
         EQUIP_VACUUM,
@@ -74,18 +76,26 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         "Rat", "Slug", "Fly"
     };
     private static final Pattern STRIP_COLOR = Pattern.compile("§[0-9a-fk-orx]");
-    private static final int TRACKER_WAIT_TICKS = 20;
+    private static final int TRACKER_WAIT_TICKS = 30;
     private static final int TRACKER_FOLLOW_TIMEOUT_TICKS = 140;
     private static final double TRACKER_REACHED_DISTANCE = 6.0;
     private static final double TRACKER_WAYPOINT_DISTANCE = 12.0;
+    private static final double TRACKER_MAX_PARTICLE_DISTANCE = 96.0;
+    private static final double TRACKER_MIN_PARTICLE_STEP_SQ = 0.16;
     private static final int MAX_PATH_FAILURES = 2;
     private static final int MAX_REASONABLE_PATH_POINTS = 420;
     private static final double MAX_PATH_DETOUR_FACTOR = 3.0;
     private static final int PLOT_WARP_SETTLE_TICKS = 20;
+    private static final int PLOT_SEARCH_POINT_SETTLE_TICKS = 12;
+    private static final int PLOT_SEARCH_TIMEOUT_TICKS = 420;
+    private static final int PLOT_SEARCH_TRACKER_INTERVAL_TICKS = 80;
+    private static final double PLOT_SEARCH_REACHED_DISTANCE = 8.0;
+    private static final double PLOT_SEARCH_INNER_OFFSET = 30.0;
     private static final double MIN_HOVER_ABOVE_PEST = 3.0;
     private static final double HOVER_Y_TOLERANCE = 0.45;
     private static final Pattern PLOT_NUMBER_PATTERN = Pattern.compile("(?i)\\bplots?\\s*(?:-|#|:)?\\s*(\\d{1,2}(?:\\s*(?:,|/|&|and)\\s*\\d{1,2})*)");
     private static final Pattern GARDEN_PEST_COUNT_PATTERN = Pattern.compile("(?i)\\bthe garden\\b.*?(?:x\\s*(\\d+)|(\\d+)\\s*x)\\s*$");
+    private static final Pattern GARDEN_PEST_LABEL_COUNT_PATTERN = Pattern.compile("(?i).*\\bpests?\\b\\s*(?::|-)?\\s*(?:x\\s*)?(\\d+)\\s*x?\\b.*");
     private static final Pattern CURRENT_PLOT_PESTS_PATTERN = Pattern.compile("(?i)\\bplot\\s*-\\s*(.+?)\\s+.*?x(\\d+)\\s*$");
     private static final Pattern CURRENT_PLOT_NO_PESTS_PATTERN = Pattern.compile("(?i)\\bplot\\s*-\\s*(.+?)\\s*$");
     private static final Pattern ONE_PEST_SPAWN_PATTERN = Pattern.compile("(?i).*\\bA\\b.*\\bPest\\b has appeared in (?:Plot - )?(.+)!");
@@ -121,6 +131,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     private final Set<Integer> killedPestIds = new HashSet<>();
     private final List<PestInfo> detectedPests = new ArrayList<>();
     private final List<Vec3d> trackerParticles = new ArrayList<>();
+    private final List<Vec3d> plotSearchPoints = new ArrayList<>();
     private final LinkedHashMap<String, PestPlotInfo> knownPestPlots = new LinkedHashMap<>();
     private final Set<String> attemptedPestPlotWarps = new HashSet<>();
     private Vec3d trackerWaypoint = null;
@@ -137,9 +148,14 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     private int trackerTicks = 0;
     private int trackerFollowTicks = 0;
     private int plotWarpTicks = 0;
+    private int plotSearchTicks = 0;
+    private int plotSearchSettleTicks = 0;
+    private int plotSearchIndex = 0;
+    private int plotSearchTrackerCooldown = 0;
     private int pathFailures = 0;
     private int scoreboardPests = -1;
     private boolean trackerAttempted = false;
+    private boolean trackerFromPlotSearch = false;
     private boolean autoRewarpSent = false;
     private Vec3d lastPathFailureTarget = null;
 
@@ -189,6 +205,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             killedPestIds.clear();
             detectedPests.clear();
             trackerParticles.clear();
+            plotSearchPoints.clear();
             knownPestPlots.clear();
             attemptedPestPlotWarps.clear();
             trackerWaypoint = null;
@@ -199,9 +216,14 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             trackerTicks = 0;
             trackerFollowTicks = 0;
             plotWarpTicks = 0;
+            plotSearchTicks = 0;
+            plotSearchSettleTicks = 0;
+            plotSearchIndex = 0;
+            plotSearchTrackerCooldown = 0;
             pathFailures = 0;
             scoreboardPests = -1;
             trackerAttempted = false;
+            trackerFromPlotSearch = false;
             autoRewarpSent = false;
             lastPathFailureTarget = null;
             rotation.clear();
@@ -231,14 +253,20 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         currentPestTag = null;
         currentPestPos = null;
         trackerParticles.clear();
+        plotSearchPoints.clear();
         attemptedPestPlotWarps.clear();
         trackerWaypoint = null;
         currentWarpPlot = null;
         trackerTicks = 0;
         trackerFollowTicks = 0;
         plotWarpTicks = 0;
+        plotSearchTicks = 0;
+        plotSearchSettleTicks = 0;
+        plotSearchIndex = 0;
+        plotSearchTrackerCooldown = 0;
         pathFailures = 0;
         trackerAttempted = false;
+        trackerFromPlotSearch = false;
         lastPathFailureTarget = null;
         pathing = false;
         renderPests = null;
@@ -271,11 +299,15 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
 
         scanForPests(client);
         syncKnownPestsFromHud();
+        if (stopIfGardenPestsConfirmedEmpty()) {
+            return;
+        }
 
         switch (state) {
             case IDLE     -> {}
             case SCANNING -> tickScanning(client);
             case WARP_TO_PLOT -> tickWarpToPlot(client);
+            case SEARCH_PLOT -> tickSearchPlot(client);
             case ACTIVATE_TRACKER -> tickActivateTracker(client);
             case FOLLOW_TRACKER_TRAIL -> tickFollowTrackerTrail(client);
             case EQUIP_VACUUM -> tickEquipVacuum(client);
@@ -297,6 +329,11 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         scanDelay++;
         if (scanDelay < 10) return;
         scanDelay = 0;
+
+        if (shouldActivateTrackerBeforeSearch()) {
+            startTrackerActivation();
+            return;
+        }
 
         if (detectedPests.isEmpty()) {
             debugMsg("No pests found within range");
@@ -341,6 +378,11 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         plotWarpTicks++;
         if (plotWarpTicks < PLOT_WARP_SETTLE_TICKS) return;
 
+        if (startPlotSearch(client)) {
+            debugMsg("No nearby pest after warping to " + formatPlot(currentWarpPlot) + ", sweeping plot");
+            return;
+        }
+
         debugMsg("No nearby pest after warping to " + formatPlot(currentWarpPlot) + ", using Pest Tracker");
         trackerAttempted = false;
         if (pestTracker.getValue()) {
@@ -353,20 +395,84 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         scanDelay = 10;
     }
 
-    // ═══════════════════════════════════════════════════ ACTIVATE TRACKER
+    // ????????????????????????????????????????????????????SEARCH PLOT
 
-    private void tickActivateTracker(MinecraftClient client) {
+    private void tickSearchPlot(MinecraftClient client) {
         if (!detectedPests.isEmpty()) {
             PestInfo closest = findClosestPest(client.player);
             if (closest != null) {
-                InputUtils.setAttack(false);
+                flyProcessor.stop();
                 targetPest(closest);
                 state = State.EQUIP_VACUUM;
                 equipDelay = 0;
+                debugMsg("Found pest during plot sweep: " + closest.name);
                 return;
             }
         }
 
+        if (pestTracker.getValue()) {
+            if (plotSearchTrackerCooldown > 0) {
+                plotSearchTrackerCooldown--;
+            }
+            if (plotSearchTrackerCooldown <= 0) {
+                plotSearchTrackerCooldown = PLOT_SEARCH_TRACKER_INTERVAL_TICKS;
+                debugMsg("Activating Pest Tracker during plot sweep");
+                startTrackerActivation(true);
+                return;
+            }
+        }
+
+        if (plotSearchPoints.isEmpty() || plotSearchIndex >= plotSearchPoints.size()) {
+            finishPlotSearch(client);
+            return;
+        }
+
+        plotSearchTicks++;
+        if (plotSearchTicks > PLOT_SEARCH_TIMEOUT_TICKS) {
+            debugMsg("Plot sweep timed out");
+            finishPlotSearch(client);
+            return;
+        }
+
+        Vec3d target = plotSearchPoints.get(plotSearchIndex);
+        double dist = playerPos(client).distanceTo(target);
+
+        if (dist <= PLOT_SEARCH_REACHED_DISTANCE) {
+            flyProcessor.stop();
+            InputUtils.releaseAll();
+            plotSearchSettleTicks++;
+            if (plotSearchSettleTicks < PLOT_SEARCH_POINT_SETTLE_TICKS) return;
+
+            plotSearchSettleTicks = 0;
+            plotSearchIndex++;
+            plotSearchTrackerCooldown = 0;
+            if (plotSearchIndex >= plotSearchPoints.size()) {
+                finishPlotSearch(client);
+                return;
+            }
+            requestFlyPathTo(client, plotSearchPoints.get(plotSearchIndex));
+            return;
+        }
+
+        plotSearchSettleTicks = 0;
+
+        if (flyProcessor.didFail()) {
+            handlePathFailure(client, target, "plot sweep path failed");
+            return;
+        }
+
+        if (flyProcessor.isDone() && !pathing) {
+            requestFlyPathTo(client, target);
+        }
+
+        if (!flyProcessor.isDone()) {
+            flyProcessor.tick(client, (float) rotSpeed.getValue());
+        }
+    }
+
+    // ═══════════════════════════════════════════════════ ACTIVATE TRACKER
+
+    private void tickActivateTracker(MinecraftClient client) {
         trackerTicks++;
         if (trackerTicks == 1) {
             int slot = findVacuumSlot(client);
@@ -393,6 +499,18 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         trackerAttempted = true;
         InputUtils.setAttack(false);
 
+        if (!detectedPests.isEmpty()) {
+            PestInfo closest = findClosestPest(client.player);
+            if (closest != null) {
+                trackerFromPlotSearch = false;
+                targetPest(closest);
+                state = State.EQUIP_VACUUM;
+                equipDelay = 0;
+                debugMsg("Found visible pest after tracker: " + closest.name);
+                return;
+            }
+        }
+
         Vec3d waypoint = calculateTrackerWaypoint(client);
         if (waypoint != null) {
             trackerWaypoint = waypoint;
@@ -403,6 +521,11 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             debugMsg("Following Pest Tracker trail to " + formatPos(trackerWaypoint));
             return;
         }
+
+        if (trackerFromPlotSearch && resumePlotSearchAfterTracker(client)) {
+            return;
+        }
+        trackerFromPlotSearch = false;
 
         if (warpToKnownPestPlot(client)) {
             return;
@@ -417,6 +540,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         if (!detectedPests.isEmpty()) {
             PestInfo closest = findClosestPest(client.player);
             if (closest != null) {
+                trackerFromPlotSearch = false;
                 flyProcessor.stop();
                 targetPest(closest);
                 state = State.EQUIP_VACUUM;
@@ -638,6 +762,11 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         if (scanDelay < 10) return;
         scanDelay = 0;
 
+        if (shouldActivateTrackerBeforeSearch()) {
+            startTrackerActivation();
+            return;
+        }
+
         if (!detectedPests.isEmpty()) {
             PestInfo next = findClosestPest(client.player);
             if (next != null) {
@@ -695,12 +824,26 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
 
     private void scanForPests(MinecraftClient client) {
         detectedPests.clear();
-        double radiusSq = scanRadius.getValue() * scanRadius.getValue();
+        detectedPests.addAll(scanVisiblePests(client, scanRadius.getValue(), killedPestIds));
+
+        if (renderESP.getValue()) {
+            renderPests = detectedPests.isEmpty() ? null : new ArrayList<>(detectedPests);
+        } else {
+            renderPests = null;
+        }
+    }
+
+    public static List<PestInfo> scanVisiblePests(MinecraftClient client, double radius, Set<Integer> ignoredEntityIds) {
+        List<PestInfo> pests = new ArrayList<>();
+        if (client == null || client.player == null || client.world == null) return pests;
+
+        double radiusSq = radius * radius;
+        Set<Integer> ignored = ignoredEntityIds == null ? Collections.emptySet() : ignoredEntityIds;
 
         for (Entity entity : client.world.getEntities()) {
             if (!(entity instanceof ArmorStandEntity armorStand)) continue;
             if (armorStand.getCustomName() == null) continue;
-            if (killedPestIds.contains(armorStand.getId())) continue;
+            if (ignored.contains(armorStand.getId())) continue;
 
             String pestName = matchPestName(getEntityName(armorStand));
             if (pestName == null) continue;
@@ -710,19 +853,19 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             if (armorStand.getY() < 50) continue;
 
             Vec3d pestPos = new Vec3d(armorStand.getX(), armorStand.getY() - 2.0, armorStand.getZ());
-            Entity target = findPestBodyNear(client, armorStand, pestName);
+            Entity target = findPestBodyNear(client, armorStand, pestName, ignored);
             if (target != null) {
                 pestPos = new Vec3d(target.getX(), target.getY(), target.getZ());
-                detectedPests.add(new PestInfo(target, pestName, pestPos));
+                pests.add(new PestInfo(target, pestName, pestPos));
             } else {
-                detectedPests.add(new PestInfo(armorStand, pestName, pestPos));
+                pests.add(new PestInfo(armorStand, pestName, pestPos));
             }
         }
 
         for (Entity entity : client.world.getEntities()) {
             if (entity instanceof ArmorStandEntity) continue;
             if (entity == client.player || entity.isRemoved()) continue;
-            if (killedPestIds.contains(entity.getId())) continue;
+            if (ignored.contains(entity.getId())) continue;
 
             String pestName = matchPestName(getEntityName(entity));
             if (pestName == null) continue;
@@ -732,18 +875,14 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             if (entity.getY() < 50) continue;
 
             Vec3d pestPos = new Vec3d(entity.getX(), entity.getY(), entity.getZ());
-            if (isDuplicatePest(pestName, pestPos)) continue;
-            detectedPests.add(new PestInfo(entity, pestName, pestPos));
+            if (isDuplicatePest(pests, pestName, pestPos)) continue;
+            pests.add(new PestInfo(entity, pestName, pestPos));
         }
 
-        if (renderESP.getValue()) {
-            renderPests = detectedPests.isEmpty() ? null : new ArrayList<>(detectedPests);
-        } else {
-            renderPests = null;
-        }
+        return pests;
     }
 
-    private String matchPestName(String stripped) {
+    private static String matchPestName(String stripped) {
         if (stripped == null || stripped.isEmpty()) return null;
         for (String name : PEST_NAMES) {
             if (stripped.contains(name)) return name;
@@ -751,7 +890,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         return null;
     }
 
-    private String getEntityName(Entity entity) {
+    private static String getEntityName(Entity entity) {
         if (entity.getCustomName() != null) {
             return STRIP_COLOR.matcher(entity.getCustomName().getString()).replaceAll("").trim();
         }
@@ -761,15 +900,15 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         return "";
     }
 
-    private boolean isDuplicatePest(String pestName, Vec3d pestPos) {
-        for (PestInfo pest : detectedPests) {
+    private static boolean isDuplicatePest(List<PestInfo> pests, String pestName, Vec3d pestPos) {
+        for (PestInfo pest : pests) {
             if (!pest.name.equals(pestName)) continue;
             if (pest.pestPos.squaredDistanceTo(pestPos) <= 9.0) return true;
         }
         return false;
     }
 
-    private Entity findPestBodyNear(MinecraftClient client, Entity nameTag, String pestName) {
+    private static Entity findPestBodyNear(MinecraftClient client, Entity nameTag, String pestName, Set<Integer> ignoredEntityIds) {
         Box searchBox = nameTag.getBoundingBox().expand(1.0, 2.5, 1.0);
         Entity best = null;
         double bestDistSq = Double.MAX_VALUE;
@@ -777,7 +916,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             if (nearby instanceof ArmorStandEntity) continue;
             if (!(nearby instanceof LivingEntity)) continue;
             if (nearby == client.player || nearby.isRemoved()) continue;
-            if (killedPestIds.contains(nearby.getId())) continue;
+            if (ignoredEntityIds.contains(nearby.getId())) continue;
 
             String nearbyName = getEntityName(nearby);
             String nearbyPest = matchPestName(nearbyName);
@@ -908,6 +1047,18 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         if (state == State.FOLLOW_TRACKER_TRAIL) {
             debugMsg("Tracker trail path failed");
             finishTrackerTrail(client);
+            return;
+        }
+
+        if (state == State.SEARCH_PLOT) {
+            plotSearchIndex++;
+            plotSearchSettleTicks = 0;
+            if (plotSearchIndex < plotSearchPoints.size()) {
+                requestFlyPathTo(client, plotSearchPoints.get(plotSearchIndex));
+            } else {
+                debugMsg("Plot sweep path failed");
+                finishPlotSearch(client);
+            }
             return;
         }
 
@@ -1069,7 +1220,13 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         attemptedPestPlotWarps.add(plot.key);
         currentWarpPlot = plot;
         plotWarpTicks = 0;
+        plotSearchPoints.clear();
+        plotSearchTicks = 0;
+        plotSearchSettleTicks = 0;
+        plotSearchIndex = 0;
+        plotSearchTrackerCooldown = 0;
         trackerAttempted = false;
+        trackerFromPlotSearch = false;
         flyProcessor.stop();
         InputUtils.releaseAll();
         markAllowedTeleportCommand();
@@ -1077,6 +1234,61 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         state = State.WARP_TO_PLOT;
         debugMsg("Warping to pest plot " + formatPlot(plot));
         return true;
+    }
+
+    private boolean startPlotSearch(MinecraftClient client) {
+        if (currentWarpPlot == null || currentWarpPlot.center == null || client.player == null) return false;
+
+        Vec3d center = currentWarpPlot.center;
+        double y = client.player.getY() + getEffectiveHoverOffset();
+        double o = PLOT_SEARCH_INNER_OFFSET;
+
+        plotSearchPoints.clear();
+        addPlotSearchPoint(center, 0.0, 0.0, y);
+        addPlotSearchPoint(center, o, 0.0, y);
+        addPlotSearchPoint(center, -o, 0.0, y);
+        addPlotSearchPoint(center, 0.0, o, y);
+        addPlotSearchPoint(center, 0.0, -o, y);
+        addPlotSearchPoint(center, o, o, y);
+        addPlotSearchPoint(center, -o, o, y);
+        addPlotSearchPoint(center, o, -o, y);
+        addPlotSearchPoint(center, -o, -o, y);
+
+        plotSearchIndex = 0;
+        plotSearchTicks = 0;
+        plotSearchSettleTicks = 0;
+        plotSearchTrackerCooldown = 0;
+        pathFailures = 0;
+        lastPathFailureTarget = null;
+        flyProcessor.stop();
+        InputUtils.releaseAll();
+        state = State.SEARCH_PLOT;
+        requestFlyPathTo(client, plotSearchPoints.get(0));
+        return true;
+    }
+
+    private void addPlotSearchPoint(Vec3d center, double xOffset, double zOffset, double y) {
+        plotSearchPoints.add(new Vec3d(center.x + xOffset, y, center.z + zOffset));
+    }
+
+    private void finishPlotSearch(MinecraftClient client) {
+        flyProcessor.stop();
+        InputUtils.releaseAll();
+        plotSearchPoints.clear();
+        plotSearchIndex = 0;
+        plotSearchTicks = 0;
+        plotSearchSettleTicks = 0;
+        plotSearchTrackerCooldown = 0;
+
+        if (currentWarpPlot != null) {
+            knownPestPlots.remove(currentWarpPlot.key);
+            debugMsg("No pest found in " + formatPlot(currentWarpPlot) + ", removing it from known plots");
+        }
+        currentWarpPlot = null;
+        if (warpToKnownPestPlot(client)) {
+            return;
+        }
+        finishNoPests(client);
     }
 
     private void markAllowedTeleportCommand() {
@@ -1135,6 +1347,10 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     }
 
     private void startTrackerActivation() {
+        startTrackerActivation(false);
+    }
+
+    private void startTrackerActivation(boolean fromPlotSearch) {
         InputUtils.releaseAll();
         flyProcessor.stop();
         trackerTicks = 0;
@@ -1142,16 +1358,43 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         trackerWaypoint = null;
         pathFailures = 0;
         lastPathFailureTarget = null;
+        trackerFromPlotSearch = fromPlotSearch;
         state = State.ACTIVATE_TRACKER;
-        debugMsg("Activating Pest Tracker...");
+        debugMsg(fromPlotSearch ? "Activating Pest Tracker during plot sweep..." : "Activating Pest Tracker...");
     }
 
     private Vec3d calculateTrackerWaypoint(MinecraftClient client) {
         if (trackerParticles.size() < 2) return null;
 
-        Vec3d first = trackerParticles.get(0);
         Vec3d last = trackerParticles.get(trackerParticles.size() - 1);
-        Vec3d direction = new Vec3d(last.x - first.x, 0.0, last.z - first.z);
+        Vec3d direction = Vec3d.ZERO;
+        for (int i = 1; i < trackerParticles.size(); i++) {
+            Vec3d prev = trackerParticles.get(i - 1);
+            Vec3d next = trackerParticles.get(i);
+            Vec3d delta = new Vec3d(next.x - prev.x, 0.0, next.z - prev.z);
+            if (delta.lengthSquared() >= TRACKER_MIN_PARTICLE_STEP_SQ) {
+                direction = direction.add(delta.normalize());
+            }
+        }
+
+        if (direction.lengthSquared() < 1.0) {
+            double bestDistSq = 0.0;
+            Vec3d bestDirection = Vec3d.ZERO;
+            for (int i = 0; i < trackerParticles.size() - 1; i++) {
+                Vec3d from = trackerParticles.get(i);
+                for (int j = i + 1; j < trackerParticles.size(); j++) {
+                    Vec3d to = trackerParticles.get(j);
+                    Vec3d delta = new Vec3d(to.x - from.x, 0.0, to.z - from.z);
+                    double distSq = delta.lengthSquared();
+                    if (distSq > bestDistSq) {
+                        bestDistSq = distSq;
+                        bestDirection = delta;
+                    }
+                }
+            }
+            direction = bestDirection;
+        }
+
         if (direction.lengthSquared() < 1.0) return null;
 
         direction = direction.normalize();
@@ -1170,29 +1413,77 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     private void finishTrackerTrail(MinecraftClient client) {
         trackerWaypoint = null;
         trackerParticles.clear();
+        if (trackerFromPlotSearch && resumePlotSearchAfterTracker(client)) {
+            return;
+        }
+        trackerFromPlotSearch = false;
         if (warpToKnownPestPlot(client)) {
             return;
         }
         finishNoPests(client);
     }
 
+    private boolean resumePlotSearchAfterTracker(MinecraftClient client) {
+        if (currentWarpPlot == null || plotSearchPoints.isEmpty()) {
+            trackerFromPlotSearch = false;
+            return false;
+        }
+
+        trackerFromPlotSearch = false;
+        trackerWaypoint = null;
+        trackerParticles.clear();
+        flyProcessor.stop();
+        InputUtils.releaseAll();
+        state = State.SEARCH_PLOT;
+
+        if (plotSearchIndex >= plotSearchPoints.size()) {
+            finishPlotSearch(client);
+            return true;
+        }
+
+        requestFlyPathTo(client, plotSearchPoints.get(plotSearchIndex));
+        debugMsg("Pest Tracker found no direct trail, resuming plot sweep");
+        return true;
+    }
+
     @EventListener
     private void onParticlePacket(ParticlePacketEvent event) {
         if (!isEnabled()) return;
         if (state != State.ACTIVATE_TRACKER && state != State.FOLLOW_TRACKER_TRAIL) return;
-        if (event.getParticle().getType() != ParticleTypes.ANGRY_VILLAGER) return;
+        if (!isTrackerParticle(event)) return;
 
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return;
 
         Vec3d pos = new Vec3d(event.getX(), event.getY(), event.getZ());
-        if (client.player.squaredDistanceTo(pos.x, pos.y, pos.z) > 80.0 * 80.0) return;
+        addTrackerParticle(client, pos);
+
+        if (event.getParticle() instanceof TrailParticleEffect trail) {
+            addTrackerParticle(client, trail.target());
+        } else if (event.getCount() == 0) {
+            Vec3d velocityHint = new Vec3d(event.getOffsetX(), event.getOffsetY(), event.getOffsetZ());
+            Vec3d horizontalHint = new Vec3d(velocityHint.x, 0.0, velocityHint.z);
+            if (horizontalHint.lengthSquared() >= 0.0625) {
+                double distance = MathHelper.clamp(horizontalHint.length() * 4.0 + event.getSpeed() * 4.0, 2.0, 8.0);
+                addTrackerParticle(client, pos.add(horizontalHint.normalize().multiply(distance)));
+            }
+        }
+    }
+
+    private boolean isTrackerParticle(ParticlePacketEvent event) {
+        return event.getParticle().getType() == ParticleTypes.ANGRY_VILLAGER
+            || event.getParticle().getType() == ParticleTypes.FIREWORK
+            || event.getParticle().getType() == ParticleTypes.TRAIL;
+    }
+
+    private void addTrackerParticle(MinecraftClient client, Vec3d pos) {
+        if (client.player.squaredDistanceTo(pos.x, pos.y, pos.z)
+            > TRACKER_MAX_PARTICLE_DISTANCE * TRACKER_MAX_PARTICLE_DISTANCE) return;
 
         if (!trackerParticles.isEmpty()) {
             Vec3d last = trackerParticles.get(trackerParticles.size() - 1);
             if (last.squaredDistanceTo(pos) < 0.25) return;
         }
-
         trackerParticles.add(pos);
         if (trackerParticles.size() > 32) {
             trackerParticles.remove(0);
@@ -1201,16 +1492,15 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
 
     @EventListener
     private void onChatMessage(ChatMessageEvent event) {
-        if (!isEnabled() || event.isOverlay()) return;
+        if (!isEnabled()) return;
 
         String message = cleanLine(event.getMessage());
         if (NO_PESTS_CHAT_PATTERN.matcher(message).matches()) {
-            knownPestPlots.clear();
-            attemptedPestPlotWarps.clear();
-            scoreboardPests = 0;
-            debugMsg("Cleared known pest plots from no-pests chat");
+            finishGardenEmptyFromTracker();
             return;
         }
+
+        if (event.isOverlay()) return;
 
         var oneMatcher = ONE_PEST_SPAWN_PATTERN.matcher(message);
         if (oneMatcher.matches()) {
@@ -1236,7 +1526,10 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
 
     private boolean beginPestSearchFallback(MinecraftClient client) {
         syncKnownPestsFromHud();
-        if (pestTracker.getValue() && !trackerAttempted) {
+        if (stopIfGardenPestsConfirmedEmpty()) {
+            return true;
+        }
+        if (shouldActivateTrackerBeforeSearch()) {
             startTrackerActivation();
             return true;
         }
@@ -1247,7 +1540,75 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     }
 
     private void finishNoPests(MinecraftClient client) {
+        syncKnownPestsFromHud();
+        int gardenPests = getGardenPestsCountFromHud();
+        if (gardenPests == 0) {
+            finishGardenEmpty("Garden reports 0 pests, stopping PestCleaner search");
+            return;
+        }
+        boolean hasFreshGardenCount = gardenPests >= 0;
+        boolean shouldContinue = gardenPests > 0 || (!hasFreshGardenCount && scoreboardPests > 0) || !knownPestPlots.isEmpty();
+        if (shouldContinue) {
+            debugMsg("Garden still reports pests, continuing search...");
+            currentWarpPlot = null;
+            trackerAttempted = false;
+            attemptedPestPlotWarps.clear();
+            trackerParticles.clear();
+            trackerWaypoint = null;
+            flyProcessor.stop();
+            InputUtils.releaseAll();
+
+            if (shouldActivateTrackerBeforeSearch()) {
+                startTrackerActivation();
+                return;
+            }
+            if (warpToKnownPestPlot(client)) {
+                return;
+            }
+            state = State.SCANNING;
+            scanDelay = 10;
+            return;
+        }
         returnOrFinishNoPests();
+    }
+
+    private boolean stopIfGardenPestsConfirmedEmpty() {
+        if (state == State.GO_BACK || state == State.FINISHED || state == State.IDLE) return false;
+        if (getGardenPestsCountFromHud() != 0) return false;
+        finishGardenEmpty("Garden reports 0 pests, stopping PestCleaner search");
+        return true;
+    }
+
+    private void finishGardenEmptyFromTracker() {
+        finishGardenEmpty("Pest Tracker confirmed garden has no pests");
+    }
+
+    private void finishGardenEmpty(String reason) {
+        clearKnownPests();
+        flyProcessor.stop();
+        InputUtils.releaseAll();
+        releaseRotation(MinecraftClient.getInstance());
+        currentPestTag = null;
+        currentPestPos = null;
+        renderTarget = null;
+        trackerAttempted = true;
+        returnOrFinishNoPests();
+        debugMsg(reason);
+    }
+
+    private void clearKnownPests() {
+        knownPestPlots.clear();
+        attemptedPestPlotWarps.clear();
+        trackerParticles.clear();
+        plotSearchPoints.clear();
+        trackerWaypoint = null;
+        currentWarpPlot = null;
+        plotSearchTicks = 0;
+        plotSearchSettleTicks = 0;
+        plotSearchIndex = 0;
+        plotSearchTrackerCooldown = 0;
+        trackerFromPlotSearch = false;
+        scoreboardPests = 0;
     }
 
     private void returnOrFinishNoPests() {
@@ -1292,9 +1653,17 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         currentPestTag = null;
         currentPestPos = null;
         renderTarget = null;
-        state = State.CHECK_MORE;
         scanDelay = 0;
         trackerAttempted = false;
+        if (shouldActivateTrackerBeforeSearch()) {
+            startTrackerActivation();
+        } else {
+            state = State.CHECK_MORE;
+        }
+    }
+
+    private boolean shouldActivateTrackerBeforeSearch() {
+        return pestTracker.getValue() && !trackerAttempted;
     }
 
     private void initRotation(MinecraftClient client) {
@@ -1392,12 +1761,24 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     private int readGardenPestsCount(List<String> lines) {
         for (String line : lines) {
             if (line == null) continue;
-            var matcher = GARDEN_PEST_COUNT_PATTERN.matcher(cleanLine(line));
-            if (!matcher.find()) continue;
-            try {
-                String count = matcher.group(1) != null ? matcher.group(1) : matcher.group(2);
-                return Integer.parseInt(count);
-            } catch (NumberFormatException ignored) {}
+            String clean = cleanLine(line);
+            var matcher = GARDEN_PEST_COUNT_PATTERN.matcher(clean);
+            if (matcher.find()) {
+                try {
+                    String count = matcher.group(1) != null ? matcher.group(1) : matcher.group(2);
+                    return Integer.parseInt(count);
+                } catch (NumberFormatException ignored) {}
+                continue;
+            }
+
+            String lower = clean.toLowerCase(Locale.ROOT);
+            if (!lower.contains("pest") || lower.contains("plot")) continue;
+            matcher = GARDEN_PEST_LABEL_COUNT_PATTERN.matcher(clean);
+            if (matcher.find()) {
+                try {
+                    return Integer.parseInt(matcher.group(1));
+                } catch (NumberFormatException ignored) {}
+            }
         }
         return -1;
     }

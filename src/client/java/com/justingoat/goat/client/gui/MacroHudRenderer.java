@@ -6,6 +6,7 @@ import java.util.List;
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.MacroHudInfo;
 import com.justingoat.goat.client.module.ModuleManager;
+import com.justingoat.goat.client.module.render.PestESP;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 import net.minecraft.client.MinecraftClient;
@@ -43,6 +44,7 @@ public final class MacroHudRenderer {
         List<String> rows = new ArrayList<>();
         rows.add("State: " + active.info.getHudState());
         rows.addAll(active.info.getHudExtraLines());
+        rows.addAll(getPestEspLines(client));
         rows.add("Runtime: " + formatDuration(active.module.getEnabledDurationMillis()));
 
         String title = active.info.getHudName() + " macro is active";
@@ -74,6 +76,14 @@ public final class MacroHudRenderer {
             }
         }
         return best;
+    }
+
+    private static List<String> getPestEspLines(MinecraftClient client) {
+        GoatModule module = ModuleManager.findByName("PestESP");
+        if (!(module instanceof PestESP) || !module.isEnabled()) {
+            return List.of();
+        }
+        return PestESP.getHudLines(client);
     }
 
     private static String formatDuration(long millis) {

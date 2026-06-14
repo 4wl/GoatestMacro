@@ -8,6 +8,7 @@ import com.justingoat.goat.client.module.mining.MiningBot;
 import com.justingoat.goat.client.module.mining.MiningTarget;
 import com.justingoat.goat.client.module.movement.ForagingMacro;
 import com.justingoat.goat.client.module.movement.PathfinderTest;
+import com.justingoat.goat.client.module.render.PestESP;
 import com.justingoat.goat.client.module.GoatModule;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
@@ -105,7 +106,8 @@ public class PathRenderer {
             }
         }
 
-        pests = PestCleaner.getRenderPests();
+        pests = PestESP.getRenderPests();
+        if (pests == null) pests = PestCleaner.getRenderPests();
         pestTarget = PestCleaner.getRenderTarget();
         if (pests != null || pestTarget != null) shouldRender = true;
 

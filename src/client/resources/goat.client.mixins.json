@@ -5,6 +5,7 @@
   "client": [
     "PlayerListHudAccessor",
     "MouseAccessor",
+    "MinecraftClientAccessor",
     "ClientPlayNetworkHandlerMixin"
   ],
   "injectors": {

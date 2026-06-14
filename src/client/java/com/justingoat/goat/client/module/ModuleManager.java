@@ -18,15 +18,20 @@ import com.justingoat.goat.client.module.mining.PowderMacro;
 import com.justingoat.goat.client.module.mining.CommissionMacro;
 import com.justingoat.goat.client.module.render.CustomFOV;
 import com.justingoat.goat.client.module.render.FullBright;
+import com.justingoat.goat.client.module.render.PestESP;
 import com.justingoat.goat.client.module.render.TimeChanger;
 import com.justingoat.goat.client.module.settings.FailsafeSettings;
 import com.justingoat.goat.client.module.settings.RotationSettings;
 import com.justingoat.goat.client.module.skills.AutoExperiments;
+import com.justingoat.goat.client.module.value.BooleanValue;
+import com.justingoat.goat.client.module.value.ModuleValue;
+import com.justingoat.goat.client.utils.MouseUtils;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 
 public final class ModuleManager {
     private static final List<GoatModule> MODULES = new ArrayList<>();
+    private static boolean hadUngrabMacroActive = false;
 
     static {
         registerCombatModules();
@@ -98,6 +103,7 @@ public final class ModuleManager {
             .build());
         register(new CustomFOV());
         register(new FullBright());
+        register(new PestESP());
         register(new TimeChanger());
     }
 
@@ -105,6 +111,7 @@ public final class ModuleManager {
         register(module("ClientSettings", ModuleCategory.SETTINGS, true)
             .bool("BetterButton", true)
             .bool("ScreenAnimation", true)
+            .bool("UngrabOnMacro", true)
             .mode("Theme", "Light", "Light", "Dark")
             .build());
         register(new RotationSettings());
@@ -128,9 +135,36 @@ public final class ModuleManager {
     }
 
     public static void tick(MinecraftClient client) {
+        boolean ungrabMacroActive = shouldUngrabMouseForMacro();
+        if (ungrabMacroActive && !hadUngrabMacroActive) {
+            MouseUtils.ungrabMouse();
+        }
+        hadUngrabMacroActive = ungrabMacroActive;
+
         for (GoatModule module : MODULES) {
             module.tick(client);
         }
+    }
+
+    private static boolean shouldUngrabMouseForMacro() {
+        if (!isBooleanSettingEnabled("ClientSettings", "UngrabOnMacro", true)) return false;
+        for (GoatModule module : MODULES) {
+            if (module.isEnabled() && module.getCategory() == ModuleCategory.MACRO) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isBooleanSettingEnabled(String moduleName, String valueName, boolean fallback) {
+        GoatModule module = findByName(moduleName);
+        if (module == null) return fallback;
+        for (ModuleValue value : module.getValues()) {
+            if (value instanceof BooleanValue booleanValue && value.getName().equals(valueName)) {
+                return booleanValue.getValue();
+            }
+        }
+        return fallback;
     }
 
     private static void register(GoatModule module) {

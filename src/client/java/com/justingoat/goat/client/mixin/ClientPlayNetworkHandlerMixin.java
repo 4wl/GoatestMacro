@@ -76,7 +76,8 @@ public class ClientPlayNetworkHandlerMixin {
         EventManager.INSTANCE.fire(new ParticlePacketEvent(
             packet.getParameters(),
             packet.getX(), packet.getY(), packet.getZ(),
-            packet.getCount()
+            packet.getOffsetX(), packet.getOffsetY(), packet.getOffsetZ(), packet.getSpeed(),
+            packet.getCount(), packet.shouldForceSpawn(), packet.isImportant()
         ));
     }
 }

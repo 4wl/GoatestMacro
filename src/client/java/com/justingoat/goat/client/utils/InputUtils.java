@@ -1,5 +1,6 @@
 package com.justingoat.goat.client.utils;
 
+import com.justingoat.goat.client.mixin.MinecraftClientAccessor;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 
@@ -32,6 +33,9 @@ public class InputUtils {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || client.options == null) return;
         setKey(client.options.attackKey, pressed);
+        if (pressed) {
+            triggerAttackWhenUngrabbed(client);
+        }
     }
 
     public static void setJump(boolean pressed) {
@@ -56,6 +60,9 @@ public class InputUtils {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || client.options == null) return;
         setKey(client.options.useKey, pressed);
+        if (pressed) {
+            triggerUseWhenUngrabbed(client);
+        }
     }
 
     public static void setHotbarSlot(int slot) {
@@ -80,5 +87,15 @@ public class InputUtils {
         if (keyBinding != null) {
             keyBinding.setPressed(pressed);
         }
+    }
+
+    private static void triggerAttackWhenUngrabbed(MinecraftClient client) {
+        if (client.currentScreen != null || client.mouse == null || client.mouse.isCursorLocked()) return;
+        ((MinecraftClientAccessor) client).invokeDoAttack();
+    }
+
+    private static void triggerUseWhenUngrabbed(MinecraftClient client) {
+        if (client.currentScreen != null || client.mouse == null || client.mouse.isCursorLocked()) return;
+        ((MinecraftClientAccessor) client).invokeDoItemUse();
     }
 }
