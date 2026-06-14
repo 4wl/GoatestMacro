@@ -33,6 +33,7 @@ public class FlyPathProcessor {
     private int currentIndex = 0;
     private boolean active = false;
     private boolean complete = false;
+    private boolean failed = false;
     private final RotationUtils rotation = new RotationUtils();
 
     private Phase phase = Phase.IDLE;
@@ -70,6 +71,7 @@ public class FlyPathProcessor {
         this.currentIndex = 0;
         this.active = true;
         this.complete = false;
+        this.failed = false;
         this.stuckTicks = 0;
         this.lastPos = null;
         this.phase = Phase.IDLE;
@@ -95,6 +97,8 @@ public class FlyPathProcessor {
 
     public boolean isDone() { return !active || complete || path == null; }
 
+    public boolean didFail() { return failed; }
+
     public List<Vec3d> getPath() { return path; }
 
     public RotationUtils getRotation() { return rotation; }
@@ -107,6 +111,7 @@ public class FlyPathProcessor {
         }
         this.path = null;
         this.active = false;
+        this.failed = false;
         this.phase = Phase.IDLE;
         this.followEntity = null;
         this.rotation.clear();
@@ -128,7 +133,7 @@ public class FlyPathProcessor {
 
         if (!player.getAbilities().flying) {
             if (!player.getAbilities().allowFlying) {
-                finish();
+                fail();
                 return;
             }
             tickFlyActivation(player);
@@ -249,7 +254,7 @@ public class FlyPathProcessor {
         }
         lastPos = new Vec3d(px, py, pz);
         if (stuckTicks > 80) {
-            finish();
+            fail();
             return;
         }
 
@@ -414,6 +419,14 @@ public class FlyPathProcessor {
     // ─────────────────── Helpers ───────────────────
 
     private void finish() {
+        finish(false);
+    }
+
+    private void fail() {
+        finish(true);
+    }
+
+    private void finish(boolean failed) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (rotation.isActive() && client.player != null) {
             client.player.setYaw(rotation.getCurrentYaw());
@@ -422,6 +435,7 @@ public class FlyPathProcessor {
         this.path = null;
         this.active = false;
         this.complete = true;
+        this.failed = failed;
         this.phase = Phase.IDLE;
         this.followEntity = null;
         this.rotation.clear();

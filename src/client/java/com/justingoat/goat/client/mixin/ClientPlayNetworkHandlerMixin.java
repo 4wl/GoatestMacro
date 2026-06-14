@@ -2,6 +2,7 @@ package com.justingoat.goat.client.mixin;
 
 import com.justingoat.goat.client.events.EventManager;
 import com.justingoat.goat.client.events.impl.packet.ChatMessageEvent;
+import com.justingoat.goat.client.events.impl.packet.ParticlePacketEvent;
 import com.justingoat.goat.client.events.impl.packet.SlotChangePacketEvent;
 import com.justingoat.goat.client.events.impl.packet.TeleportPacketEvent;
 import com.justingoat.goat.client.events.impl.packet.VelocityPacketEvent;
@@ -9,6 +10,7 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.network.packet.s2c.play.EntityVelocityUpdateS2CPacket;
 import net.minecraft.network.packet.s2c.play.GameMessageS2CPacket;
+import net.minecraft.network.packet.s2c.play.ParticleS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
 import net.minecraft.network.packet.s2c.play.UpdateSelectedSlotS2CPacket;
 import org.spongepowered.asm.mixin.Mixin;
@@ -67,5 +69,14 @@ public class ClientPlayNetworkHandlerMixin {
     private void onChatMessage(GameMessageS2CPacket packet, CallbackInfo ci) {
         String message = packet.content().getString();
         EventManager.INSTANCE.fire(new ChatMessageEvent(message, packet.overlay()));
+    }
+
+    @Inject(method = "onParticle", at = @At("HEAD"))
+    private void onParticlePacket(ParticleS2CPacket packet, CallbackInfo ci) {
+        EventManager.INSTANCE.fire(new ParticlePacketEvent(
+            packet.getParameters(),
+            packet.getX(), packet.getY(), packet.getZ(),
+            packet.getCount()
+        ));
     }
 }

@@ -17,6 +17,9 @@ import com.justingoat.goat.client.utils.RotationUtils;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
 import net.minecraft.state.property.IntProperty;
 import net.minecraft.state.property.Property;
@@ -107,6 +110,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
                 return;
             }
             resetAllState(client);
+            equipBestHoe(client);
             ChatUtils.sendSuccessMessage("FarmingMacro enabled (" + farmType.getValue() + ")");
         } else if (!enabled && wasEnabled) {
             state = State.WAITING;
@@ -144,6 +148,32 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
 
     private boolean isVertical() {
         return "Vertical".equals(farmType.getValue());
+    }
+
+    private void equipBestHoe(MinecraftClient client) {
+        int slot = findBestHoeSlot(client);
+        if (slot == -1) return;
+
+        client.player.getInventory().setSelectedSlot(slot);
+        debugMsg("Equipped hoe in slot " + (slot + 1));
+    }
+
+    private int findBestHoeSlot(MinecraftClient client) {
+        Item[] priority = {
+            Items.DIAMOND_HOE,
+            Items.GOLDEN_HOE,
+            Items.IRON_HOE
+        };
+
+        for (Item target : priority) {
+            for (int slot = 0; slot < 9; slot++) {
+                ItemStack stack = client.player.getInventory().getStack(slot);
+                if (!stack.isEmpty() && stack.isOf(target)) {
+                    return slot;
+                }
+            }
+        }
+        return -1;
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -855,7 +885,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             InputUtils.releaseAll();
 
             GoatModule pestModule = ModuleManager.findByName("PestCleaner");
-            if (pestModule != null) {
+            if (pestModule instanceof PestCleaner) {
                 debugMsg("Rewarp trigger reached, running PestCleaner first...");
                 ChatUtils.sendInfoMessage("Rewarp trigger reached, cleaning pests first...");
                 pestModule.setEnabled(true);
@@ -872,6 +902,13 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     private void tickPestCleaning(MinecraftClient client) {
         GoatModule pestModule = ModuleManager.findByName("PestCleaner");
         if (pestModule == null || !pestModule.isEnabled()) {
+            if (pestModule instanceof PestCleaner pestCleaner && pestCleaner.consumeAutoRewarpSent()) {
+                debugMsg("PestCleaner finished and auto-rewarped...");
+                ChatUtils.sendInfoMessage("Pest cleaning done, waiting for rewarp...");
+                state = State.REWARP;
+                return;
+            }
+
             debugMsg("PestCleaner finished, rewarping...");
             ChatUtils.sendInfoMessage("Pest cleaning done, warping...");
             markWarpCommand();

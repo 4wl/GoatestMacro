@@ -25,6 +25,8 @@ public class TeleportFailsafe extends Failsafe {
         if (!FailsafeManager.getInstance().isAnyMacroActive()) return;
 
         double distance = event.getDistance();
+        if (shouldSuppress()) return;
+
         if (distance < 0.01) {
             double totalRot = event.getTotalRotation();
             if (totalRot > 0.1) {
@@ -32,8 +34,6 @@ public class TeleportFailsafe extends Failsafe {
             }
             return;
         }
-
-        if (shouldSuppress()) return;
 
         if (distance < 1.0) return;
 
@@ -69,7 +69,13 @@ public class TeleportFailsafe extends Failsafe {
     }
 
     public void markCommand() {
-        lastCommandTime = System.currentTimeMillis();
+        markCommand(750);
+    }
+
+    public void markCommand(long suppressMs) {
+        long now = System.currentTimeMillis();
+        lastCommandTime = now;
+        suppressUntil = Math.max(suppressUntil, now + Math.max(0, suppressMs));
     }
 
     private boolean shouldSuppress() {
