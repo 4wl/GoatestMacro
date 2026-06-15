@@ -10,8 +10,10 @@ import com.justingoat.goat.client.module.value.NumberValue;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.module.failsafe.impl.TeleportFailsafe;
 import com.justingoat.goat.client.module.farming.PestCleaner;
+import com.justingoat.goat.client.utils.BPSTracker;
 import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.LagDetector;
 import com.justingoat.goat.client.utils.RotationUtils;
 
 import net.minecraft.block.Block;
@@ -50,6 +52,8 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     private static final int ANTI_STUCK_MAX_NUDGES = 3;
     private static final double ANTI_STUCK_MIN_HORIZONTAL_MOVE_SQ = 0.0025;
     private static final double ANTI_STUCK_ESCAPE_CHECK_DISTANCE = 1.25;
+    private static final double BPS_STUCK_THRESHOLD = 0.35;
+    private static final long BPS_STUCK_DURATION_MS = 2200L;
 
     // ── States ──
     private enum State {
@@ -67,6 +71,8 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     private final ModeValue farmType;
     private final NumberValue pitch;
     private final BooleanValue snapTo45;
+    private final BooleanValue lagPause;
+    private final BooleanValue bpsMonitor;
     private final NumberValue delayMin;
     private final NumberValue delayMax;
     private final BooleanValue debug;
@@ -104,6 +110,8 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         farmType = addMode("Farm Type", "Vertical", "Vertical", "S-Shape");
         pitch = addNumber("Pitch", 3.0, -90.0, 90.0);
         snapTo45 = addBoolean("Snap 45°", false);
+        lagPause = addBoolean("LagPause", true);
+        bpsMonitor = addBoolean("BPSTracker", true);
         delayMin = addNumber("Delay Min (ms)", 50.0, 0.0, 500.0);
         delayMax = addNumber("Delay Max (ms)", 150.0, 0.0, 500.0);
         debug = addBoolean("Debug", false);
@@ -207,6 +215,13 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
 
         if (client.currentScreen != null) {
             InputUtils.releaseAll();
+            return;
+        }
+
+        if (lagPause.getValue() && LagDetector.isLagging() && shouldMonitorMovementState()) {
+            InputUtils.releaseAll();
+            resetAntiStuck();
+            debugMsg("Lag detected, pausing movement");
             return;
         }
 
@@ -885,6 +900,13 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
 
     // ── Shared utility ──
 
+    private boolean shouldMonitorMovementState() {
+        return switch (state) {
+            case V_DECIDE_MOVEMENT, V_IDLE_CHECKS, S_LEFT, S_RIGHT, S_SWITCHING_LANE -> true;
+            default -> false;
+        };
+    }
+
     private boolean tickAntiStuck(MinecraftClient client, String reason, float preferredYaw) {
         if (client.player == null || !client.player.isOnGround()) {
             resetAntiStuck();
@@ -922,7 +944,11 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         }
         antiStuckLastPos = pos;
 
-        if (antiStuckTicks < ANTI_STUCK_TICKS) {
+        boolean lowBpsStuck = bpsMonitor.getValue()
+            && shouldMonitorMovementState()
+            && BPSTracker.isLowMovementFor(BPS_STUCK_THRESHOLD, BPS_STUCK_DURATION_MS);
+
+        if (antiStuckTicks < ANTI_STUCK_TICKS && !lowBpsStuck) {
             return false;
         }
 

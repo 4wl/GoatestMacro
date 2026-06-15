@@ -32,7 +32,9 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.RaycastContext;
 
 import java.util.*;
 import java.util.regex.Pattern;
@@ -99,6 +101,9 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     private static final double ANTI_STUCK_MIN_MOVE_SQ = 0.006;
     private static final double ANTI_STUCK_TARGET_CHANGE_SQ = 64.0;
     private static final double ANTI_STUCK_ESCAPE_CHECK_DISTANCE = 1.25;
+    private static final int VACUUM_BLOCKED_RECOVERY_TICKS = 35;
+    private static final int VACUUM_STALL_RECOVERY_TICKS = 95;
+    private static final int VACUUM_MAX_RECOVERY_ATTEMPTS = 2;
     private static final double MIN_HOVER_ABOVE_PEST = 3.0;
     private static final double HOVER_Y_TOLERANCE = 0.45;
     private static final Pattern PLOT_NUMBER_PATTERN = Pattern.compile("(?i)\\bplots?\\s*(?:-|#|:)?\\s*(\\d{1,2}(?:\\s*(?:,|/|&|and)\\s*\\d{1,2})*)");
@@ -155,6 +160,8 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     private int antiStuckTicks = 0;
     private int antiStuckNudgeTicks = 0;
     private int antiStuckAttempts = 0;
+    private int vacuumBlockedTicks = 0;
+    private int vacuumRecoveryAttempts = 0;
     private int scoreboardPests = -1;
     private boolean trackerAttempted = false;
     private boolean trackerFromPlotSearch = false;
@@ -227,6 +234,8 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             plotSearchTrackerCooldown = 0;
             pathFailures = 0;
             resetAntiStuck();
+            vacuumBlockedTicks = 0;
+            vacuumRecoveryAttempts = 0;
             scoreboardPests = -1;
             trackerAttempted = false;
             trackerFromPlotSearch = false;
@@ -272,6 +281,8 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         plotSearchTrackerCooldown = 0;
         pathFailures = 0;
         resetAntiStuck();
+        vacuumBlockedTicks = 0;
+        vacuumRecoveryAttempts = 0;
         trackerAttempted = false;
         trackerFromPlotSearch = false;
         lastPathFailureTarget = null;
@@ -743,6 +754,19 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
 
         maintainHoverAbovePest(client);
 
+        boolean blockedLine = !hasLineOfSightTo(client, targetCenter);
+        if (blockedLine && dist <= vacuumRange) {
+            vacuumBlockedTicks++;
+        } else {
+            vacuumBlockedTicks = 0;
+        }
+
+        if (vacuumBlockedTicks > VACUUM_BLOCKED_RECOVERY_TICKS
+            || killTicks > VACUUM_STALL_RECOVERY_TICKS + vacuumRecoveryAttempts * 45) {
+            recoverFromVacuumStall(client, blockedLine ? "line blocked" : "vacuum stalled");
+            return;
+        }
+
         // Micro-movement to stay in range
         if (horizontalDist > Math.max(1.5, vacuumRange * 0.45)) {
             InputUtils.setForward(true);
@@ -753,9 +777,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
 
         killTicks++;
         if (killTicks > 200) {
-            debugMsg("Pest kill timeout, moving on...");
-            killedPestIds.add(currentPestTag.getId());
-            onPestKilled();
+            recoverFromVacuumStall(client, "kill timeout");
         }
     }
 
@@ -938,6 +960,20 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     private PestInfo findClosestPest(ClientPlayerEntity player) {
         PestInfo closest = null;
         double closestDistSq = Double.MAX_VALUE;
+
+        for (PestInfo pest : detectedPests) {
+            if (pest.nameTag.isRemoved()) continue;
+            if (currentWarpPlot != null && currentWarpPlot.numericId >= 0
+                && !PlotUtils.isInsidePlot(currentWarpPlot.numericId, pest.pestPos)) {
+                continue;
+            }
+            double dSq = player.squaredDistanceTo(pest.pestPos.x, pest.pestPos.y, pest.pestPos.z);
+            if (dSq < closestDistSq) {
+                closestDistSq = dSq;
+                closest = pest;
+            }
+        }
+        if (closest != null) return closest;
 
         for (PestInfo pest : detectedPests) {
             if (pest.nameTag.isRemoved()) continue;
@@ -1304,9 +1340,12 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         if (gardenPests >= 0) {
             scoreboardPests = gardenPests;
             if (gardenPests == 0) {
-                knownPestPlots.clear();
-                attemptedPestPlotWarps.clear();
-                return;
+                if (getPestPlotsFromHud().isEmpty()) {
+                    knownPestPlots.clear();
+                    attemptedPestPlotWarps.clear();
+                    return;
+                }
+                debugMsg("Garden pest count parsed as 0, but pest plots are still listed; continuing search");
             }
         }
 
@@ -1461,6 +1500,8 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         pathFailures = 0;
         lastPathFailureTarget = null;
         resetAntiStuck();
+        vacuumBlockedTicks = 0;
+        vacuumRecoveryAttempts = 0;
         flyProcessor.stop();
         InputUtils.releaseAll();
         state = State.SEARCH_PLOT;
@@ -1743,12 +1784,16 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     private void finishNoPests(MinecraftClient client) {
         syncKnownPestsFromHud();
         int gardenPests = getGardenPestsCountFromHud();
-        if (gardenPests == 0) {
+        boolean hasHudPestPlots = !getPestPlotsFromHud().isEmpty();
+        if (gardenPests == 0 && !hasHudPestPlots) {
             finishGardenEmpty("Garden reports 0 pests, stopping PestCleaner search");
             return;
         }
         boolean hasFreshGardenCount = gardenPests >= 0;
-        boolean shouldContinue = gardenPests > 0 || (!hasFreshGardenCount && scoreboardPests > 0) || !knownPestPlots.isEmpty();
+        boolean shouldContinue = gardenPests > 0
+            || hasHudPestPlots
+            || (!hasFreshGardenCount && scoreboardPests > 0)
+            || !knownPestPlots.isEmpty();
         if (shouldContinue) {
             debugMsg("Garden still reports pests, continuing search...");
             currentWarpPlot = null;
@@ -1770,12 +1815,22 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             scanDelay = 10;
             return;
         }
-        returnOrFinishNoPests();
+
+        if (pestTracker.getValue()) {
+            trackerAttempted = false;
+            startTrackerActivation();
+            debugMsg("No local pests found, but garden empty was not confirmed; rechecking with Pest Tracker");
+            return;
+        }
+
+        state = State.SCANNING;
+        scanDelay = 0;
+        debugMsg("No local pests found, but garden empty was not confirmed; continuing scan");
     }
 
     private boolean stopIfGardenPestsConfirmedEmpty() {
         if (state == State.GO_BACK || state == State.FINISHED || state == State.IDLE) return false;
-        if (getGardenPestsCountFromHud() != 0) return false;
+        if (getGardenPestsCountFromHud() != 0 || !getPestPlotsFromHud().isEmpty()) return false;
         finishGardenEmpty("Garden reports 0 pests, stopping PestCleaner search");
         return true;
     }
@@ -1822,6 +1877,17 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     }
 
     private void finishCompleted(MinecraftClient client) {
+        if (pestsStillReported()) {
+            debugMsg("Completion blocked because HUD still reports pests");
+            currentPestTag = null;
+            currentPestPos = null;
+            renderTarget = null;
+            trackerAttempted = false;
+            state = State.CHECK_MORE;
+            scanDelay = 10;
+            return;
+        }
+
         if (autoRewarp.getValue() && !autoRewarpSent
             && client.player != null && client.player.networkHandler != null) {
             markAllowedTeleportCommand();
@@ -1830,6 +1896,16 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             debugMsg("PestCleaner complete, rewarping...");
         }
         setEnabled(false);
+    }
+
+    private boolean pestsStillReported() {
+        syncKnownPestsFromHud();
+        int gardenPests = getGardenPestsCountFromHud();
+        return gardenPests > 0
+            || !getPestPlotsFromHud().isEmpty()
+            || scoreboardPests > 0
+            || !knownPestPlots.isEmpty()
+            || !detectedPests.isEmpty();
     }
 
     private void targetPest(PestInfo pest) {
@@ -1857,6 +1933,8 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         currentPestPos = null;
         renderTarget = null;
         scanDelay = 0;
+        vacuumBlockedTicks = 0;
+        vacuumRecoveryAttempts = 0;
         trackerAttempted = false;
         if (shouldActivateTrackerBeforeSearch()) {
             startTrackerActivation();
@@ -1908,6 +1986,44 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         double yErr = targetY - client.player.getY();
         InputUtils.setJump(yErr > HOVER_Y_TOLERANCE);
         InputUtils.setSneak(yErr < -HOVER_Y_TOLERANCE);
+    }
+
+    private void recoverFromVacuumStall(MinecraftClient client, String reason) {
+        InputUtils.setUse(false);
+        InputUtils.releaseAll();
+        vacuumBlockedTicks = 0;
+        killTicks = 0;
+        vacuumRecoveryAttempts++;
+        debugMsg("Vacuum recovery (" + vacuumRecoveryAttempts + "/" + VACUUM_MAX_RECOVERY_ATTEMPTS + "): " + reason);
+
+        if (vacuumRecoveryAttempts <= VACUUM_MAX_RECOVERY_ATTEMPTS && currentPestPos != null) {
+            state = State.FLY_TO_PEST;
+            resetAntiStuck();
+            flyProcessor.stop();
+            requestFlyPath(client);
+            return;
+        }
+
+        vacuumRecoveryAttempts = 0;
+        currentPestTag = null;
+        currentPestPos = null;
+        renderTarget = null;
+        if (beginPestSearchFallback(client)) return;
+        state = State.CHECK_MORE;
+        scanDelay = 0;
+    }
+
+    private boolean hasLineOfSightTo(MinecraftClient client, Vec3d target) {
+        if (client.player == null || client.world == null || target == null) return true;
+        Vec3d eye = client.player.getEyePos();
+        HitResult result = client.world.raycast(new RaycastContext(
+            eye,
+            target,
+            RaycastContext.ShapeType.COLLIDER,
+            RaycastContext.FluidHandling.NONE,
+            client.player
+        ));
+        return result == null || result.getType() == HitResult.Type.MISS || result.getPos().squaredDistanceTo(target) < 1.0;
     }
 
     private double horizontalDistanceTo(Vec3d target, MinecraftClient client) {

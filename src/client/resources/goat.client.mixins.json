@@ -5,6 +5,7 @@
   "client": [
     "PlayerListHudAccessor",
     "MouseAccessor",
+    "MouseLockMixin",
     "MinecraftClientAccessor",
     "ClientPlayNetworkHandlerMixin"
   ],

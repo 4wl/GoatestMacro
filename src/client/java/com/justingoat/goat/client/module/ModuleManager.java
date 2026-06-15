@@ -6,6 +6,8 @@ import java.util.List;
 
 import com.justingoat.goat.client.module.combat.CombatMacro;
 import com.justingoat.goat.client.module.farming.PestCleaner;
+import com.justingoat.goat.client.module.farming.PlotCleaningHelper;
+import com.justingoat.goat.client.module.farming.VisitorsMacro;
 import com.justingoat.goat.client.module.movement.AutoSprint;
 import com.justingoat.goat.client.module.movement.FarmingMacro;
 import com.justingoat.goat.client.module.movement.ForagingMacro;
@@ -25,6 +27,8 @@ import com.justingoat.goat.client.module.settings.RotationSettings;
 import com.justingoat.goat.client.module.skills.AutoExperiments;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.ModuleValue;
+import com.justingoat.goat.client.utils.BPSTracker;
+import com.justingoat.goat.client.utils.LagDetector;
 import com.justingoat.goat.client.utils.MouseUtils;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
@@ -74,6 +78,8 @@ public final class ModuleManager {
 
     private static void registerFarmingModules() {
         register(new PestCleaner());
+        register(new PlotCleaningHelper());
+        register(new VisitorsMacro());
     }
 
     private static void registerMiningModules() {
@@ -135,9 +141,14 @@ public final class ModuleManager {
     }
 
     public static void tick(MinecraftClient client) {
+        BPSTracker.update(client);
+        LagDetector.update(client);
+
         boolean ungrabMacroActive = shouldUngrabMouseForMacro();
         if (ungrabMacroActive && !hadUngrabMacroActive) {
             MouseUtils.ungrabMouse();
+        } else if (!ungrabMacroActive && hadUngrabMacroActive) {
+            MouseUtils.regrabMouse();
         }
         hadUngrabMacroActive = ungrabMacroActive;
 
