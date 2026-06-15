@@ -25,7 +25,10 @@ import net.minecraft.state.property.IntProperty;
 import net.minecraft.state.property.Property;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
 
 import java.util.*;
 
@@ -41,6 +44,12 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         "minecraft:wheat", "Wheat Hoe",
         "minecraft:carrots", "Carrot Hoe"
     );
+
+    private static final int ANTI_STUCK_TICKS = 45;
+    private static final int ANTI_STUCK_NUDGE_TICKS = 10;
+    private static final int ANTI_STUCK_MAX_NUDGES = 3;
+    private static final double ANTI_STUCK_MIN_HORIZONTAL_MOVE_SQ = 0.0025;
+    private static final double ANTI_STUCK_ESCAPE_CHECK_DISTANCE = 1.25;
 
     // ── States ──
     private enum State {
@@ -72,6 +81,11 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     private BlockPos endPoint = null;
     private BlockPos rewarpTriggerPoint = null;
     private boolean rewarpTriggered = false;
+    private int antiStuckTicks = 0;
+    private int antiStuckNudgeTicks = 0;
+    private int antiStuckAttempts = 0;
+    private Vec3d antiStuckLastPos = null;
+    private Float antiStuckEscapeYaw = null;
 
     // ── Vertical state ──
     private String farmAxis = null;
@@ -115,6 +129,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         } else if (!enabled && wasEnabled) {
             state = State.WAITING;
             rotation.clear();
+            resetAntiStuck();
             InputUtils.releaseAll();
             ChatUtils.sendWarningMessage("FarmingMacro disabled");
         }
@@ -124,6 +139,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         warping = false;
         warpDelay = null;
         rewarpTriggered = false;
+        resetAntiStuck();
         rotation.init(client.player.getYaw(), client.player.getPitch());
 
         // Vertical
@@ -336,9 +352,11 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
 
         if (distFlat > 1.0) {
             InputUtils.setForward(true);
+            tickAntiStuck(client, "vertical approach", lockedYaw);
             return;
         } else {
             InputUtils.setForward(false);
+            resetAntiStuck();
         }
 
         decideDirection(client);
@@ -374,13 +392,18 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             InputUtils.setRight(false);
             InputUtils.setForward(false);
             InputUtils.setBack(false);
+            resetAntiStuck();
             inAir = true;
         }
 
         if (inAir && isOnGround) {
             inAir = false;
+            resetAntiStuck();
             state = State.V_DECIDE_MOVEMENT;
+            return;
         }
+
+        tickAntiStuck(client, "vertical row", "a".equals(movementKey) ? lockedYaw + 90.0f : lockedYaw - 90.0f);
     }
 
     private void decideDirection(MinecraftClient client) {
@@ -452,6 +475,10 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         InputUtils.setLeft(true);
         InputUtils.setAttack(true);
 
+        if (tickAntiStuck(client, "s-shape left", lockedYaw + 90.0f)) {
+            return;
+        }
+
         // updateState: check if we should switch lane
         if (!sIsLeftWalkable(client)) {
             if (sIsFrontWalkable(client) || sIsBackWalkable(client)) {
@@ -480,6 +507,10 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         InputUtils.releaseAll();
         InputUtils.setRight(true);
         InputUtils.setAttack(true);
+
+        if (tickAntiStuck(client, "s-shape right", lockedYaw - 90.0f)) {
+            return;
+        }
 
         if (!sIsRightWalkable(client)) {
             if (sIsFrontWalkable(client) || sIsBackWalkable(client)) {
@@ -517,8 +548,14 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         if (changeLaneDir == ChangeLaneDir.FORWARD) {
             InputUtils.setForward(true);
             InputUtils.setSprint(true);
+            if (tickAntiStuck(client, "s-shape lane switch", lockedYaw)) {
+                return;
+            }
         } else {
             InputUtils.setBack(true);
+            if (tickAntiStuck(client, "s-shape lane switch", lockedYaw + 180.0f)) {
+                return;
+            }
         }
 
         // Only check for new row after player has moved >= 1 block
@@ -847,6 +884,197 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     }
 
     // ── Shared utility ──
+
+    private boolean tickAntiStuck(MinecraftClient client, String reason, float preferredYaw) {
+        if (client.player == null || !client.player.isOnGround()) {
+            resetAntiStuck();
+            return false;
+        }
+
+        if (antiStuckNudgeTicks > 0) {
+            antiStuckNudgeTicks--;
+            float escapeYaw = antiStuckEscapeYaw != null ? antiStuckEscapeYaw : preferredYaw + 180.0f;
+            applyAntiStuckMovement(client, escapeYaw);
+            InputUtils.setSprint(false);
+            InputUtils.setJump(true);
+            InputUtils.setSneak(false);
+            InputUtils.setAttack(true);
+
+            if (antiStuckNudgeTicks == 0) {
+                InputUtils.releaseAll();
+                antiStuckTicks = 0;
+                antiStuckLastPos = null;
+            }
+            return true;
+        }
+
+        Vec3d pos = playerPos(client);
+        if (antiStuckLastPos != null) {
+            double dx = pos.x - antiStuckLastPos.x;
+            double dz = pos.z - antiStuckLastPos.z;
+            double movedSq = dx * dx + dz * dz;
+            if (movedSq < ANTI_STUCK_MIN_HORIZONTAL_MOVE_SQ) {
+                antiStuckTicks++;
+            } else {
+                antiStuckTicks = 0;
+                antiStuckAttempts = 0;
+            }
+        }
+        antiStuckLastPos = pos;
+
+        if (antiStuckTicks < ANTI_STUCK_TICKS) {
+            return false;
+        }
+
+        InputUtils.releaseAll();
+        antiStuckTicks = 0;
+        antiStuckLastPos = null;
+
+        if (antiStuckAttempts < ANTI_STUCK_MAX_NUDGES) {
+            antiStuckAttempts++;
+            antiStuckEscapeYaw = chooseAntiStuckEscapeYaw(client, preferredYaw);
+            antiStuckNudgeTicks = ANTI_STUCK_NUDGE_TICKS;
+            debugMsg("Anti-stuck nudge: " + reason);
+            return true;
+        }
+
+        debugMsg("Anti-stuck reset: " + reason);
+        antiStuckAttempts = 0;
+        resetMovementStateAfterStuck(client);
+        return true;
+    }
+
+    private void resetAntiStuck() {
+        antiStuckTicks = 0;
+        antiStuckNudgeTicks = 0;
+        antiStuckAttempts = 0;
+        antiStuckLastPos = null;
+        antiStuckEscapeYaw = null;
+    }
+
+    private void resetMovementStateAfterStuck(MinecraftClient client) {
+        InputUtils.releaseAll();
+        if (isVertical()) {
+            movementKey = null;
+            inAir = false;
+            state = State.V_DECIDE_MOVEMENT;
+        } else {
+            changeLaneDir = null;
+            sSwitchStartX = client.player.getX();
+            sSwitchStartZ = client.player.getZ();
+            state = State.S_NONE;
+        }
+    }
+
+    private float chooseAntiStuckEscapeYaw(MinecraftClient client, float preferredYaw) {
+        BlockPos intersecting = findIntersectingBlock(client);
+        if (intersecting != null) {
+            Direction side = findClosestClearSide(client, intersecting);
+            if (side != null) {
+                Vec3d escape = Vec3d.ofCenter(intersecting).add(
+                    side.getOffsetX() * ANTI_STUCK_ESCAPE_CHECK_DISTANCE,
+                    0.0,
+                    side.getOffsetZ() * ANTI_STUCK_ESCAPE_CHECK_DISTANCE
+                );
+                return angleToPoint(client, escape.x, escape.z);
+            }
+        }
+
+        float bestYaw = MathHelper.wrapDegrees(preferredYaw + 180.0f);
+        float bestScore = Float.MAX_VALUE;
+        for (int offset = 0; offset < 360; offset += 20) {
+            float yaw = MathHelper.wrapDegrees(preferredYaw + offset);
+            if (!isEscapeDirectionClear(client, yaw)) continue;
+
+            float score = Math.abs(MathHelper.wrapDegrees(yaw - preferredYaw));
+            if (score < bestScore) {
+                bestScore = score;
+                bestYaw = yaw;
+            }
+        }
+        return bestYaw;
+    }
+
+    private void applyAntiStuckMovement(MinecraftClient client, float desiredYaw) {
+        float relYaw = MathHelper.wrapDegrees(desiredYaw - client.player.getYaw());
+
+        boolean forward = relYaw >= -67.5f && relYaw < 67.5f;
+        boolean left = relYaw >= 22.5f && relYaw < 157.5f;
+        boolean back = relYaw >= 112.5f || relYaw < -112.5f;
+        boolean right = relYaw >= -157.5f && relYaw < -22.5f;
+
+        InputUtils.setForward(forward);
+        InputUtils.setBack(back);
+        InputUtils.setLeft(left);
+        InputUtils.setRight(right);
+    }
+
+    private BlockPos findIntersectingBlock(MinecraftClient client) {
+        if (client.player == null || client.world == null) return null;
+
+        Box playerBox = client.player.getBoundingBox().expand(0.02, 0.0, 0.02);
+        BlockPos playerBlock = client.player.getBlockPos();
+        BlockPos best = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = 0; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    BlockPos pos = playerBlock.add(dx, dy, dz);
+                    if (isPassable(client, pos)) continue;
+
+                    Box blockBox = new Box(pos);
+                    if (!playerBox.intersects(blockBox)) continue;
+
+                    double distSq = Vec3d.ofCenter(pos).squaredDistanceTo(playerPos(client));
+                    if (distSq < bestDistSq) {
+                        bestDistSq = distSq;
+                        best = pos;
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    private Direction findClosestClearSide(MinecraftClient client, BlockPos pos) {
+        Direction best = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (Direction direction : Direction.Type.HORIZONTAL) {
+            BlockPos adjacent = pos.offset(direction);
+            if (!isPassable(client, adjacent) || !isPassable(client, adjacent.up())) continue;
+
+            Vec3d side = Vec3d.ofCenter(pos).add(direction.getOffsetX() * 0.5, 0.0, direction.getOffsetZ() * 0.5);
+            double distSq = side.squaredDistanceTo(playerPos(client));
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                best = direction;
+            }
+        }
+        return best;
+    }
+
+    private boolean isEscapeDirectionClear(MinecraftClient client, float yaw) {
+        Vec3d pos = playerPos(client);
+        double radians = Math.toRadians(yaw);
+        double dx = -Math.sin(radians) * ANTI_STUCK_ESCAPE_CHECK_DISTANCE;
+        double dz = Math.cos(radians) * ANTI_STUCK_ESCAPE_CHECK_DISTANCE;
+
+        BlockPos feet = BlockPos.ofFloored(pos.x + dx, pos.y + 0.1, pos.z + dz);
+        BlockPos body = BlockPos.ofFloored(pos.x + dx, pos.y + 0.9, pos.z + dz);
+        BlockPos head = BlockPos.ofFloored(pos.x + dx, pos.y + 1.8, pos.z + dz);
+        return isPassable(client, feet) && isPassable(client, body) && isPassable(client, head);
+    }
+
+    private boolean isPassable(MinecraftClient client, BlockPos pos) {
+        if (client.world == null) return true;
+        return client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty();
+    }
+
+    private Vec3d playerPos(MinecraftClient client) {
+        return new Vec3d(client.player.getX(), client.player.getY(), client.player.getZ());
+    }
 
     private float snapYaw(float yaw) {
         float step = snapTo45.getValue() ? 45.0f : 90.0f;

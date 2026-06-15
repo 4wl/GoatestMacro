@@ -15,6 +15,7 @@ import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.NumberValue;
 import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.PlotUtils;
 import com.justingoat.goat.client.utils.RotationInterpolator;
 import com.justingoat.goat.client.utils.RotationUtils;
 import com.justingoat.goat.client.utils.ScoreboardUtils;
@@ -29,6 +30,7 @@ import net.minecraft.particle.ParticleTypes;
 import net.minecraft.particle.TrailParticleEffect;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 
@@ -88,9 +90,15 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     private static final int PLOT_WARP_SETTLE_TICKS = 20;
     private static final int PLOT_SEARCH_POINT_SETTLE_TICKS = 12;
     private static final int PLOT_SEARCH_TIMEOUT_TICKS = 420;
-    private static final int PLOT_SEARCH_TRACKER_INTERVAL_TICKS = 80;
+    private static final int PLOT_SEARCH_TRACKER_INTERVAL_TICKS = 45;
     private static final double PLOT_SEARCH_REACHED_DISTANCE = 8.0;
     private static final double PLOT_SEARCH_INNER_OFFSET = 30.0;
+    private static final int ANTI_STUCK_TICKS = 35;
+    private static final int ANTI_STUCK_NUDGE_TICKS = 12;
+    private static final int ANTI_STUCK_MAX_NUDGES = 2;
+    private static final double ANTI_STUCK_MIN_MOVE_SQ = 0.006;
+    private static final double ANTI_STUCK_TARGET_CHANGE_SQ = 64.0;
+    private static final double ANTI_STUCK_ESCAPE_CHECK_DISTANCE = 1.25;
     private static final double MIN_HOVER_ABOVE_PEST = 3.0;
     private static final double HOVER_Y_TOLERANCE = 0.45;
     private static final Pattern PLOT_NUMBER_PATTERN = Pattern.compile("(?i)\\bplots?\\s*(?:-|#|:)?\\s*(\\d{1,2}(?:\\s*(?:,|/|&|and)\\s*\\d{1,2})*)");
@@ -102,14 +110,6 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     private static final Pattern MULTI_PEST_SPAWN_PATTERN = Pattern.compile("(?i).*\\b(\\d+)\\b.*\\bPests?\\b have spawned in (?:Plot - )?(.+)!");
     private static final Pattern OFFLINE_PEST_SPAWN_PATTERN = Pattern.compile("(?i).*While you were offline, .*\\bPests?\\b spawned in Plots (.+)!");
     private static final Pattern NO_PESTS_CHAT_PATTERN = Pattern.compile("(?i).*There are not any Pests on your Garden right now.*");
-    private static final int[][] PLOT_MAP = {
-        {21, 13, 9, 14, 22},
-        {15, 5, 1, 6, 16},
-        {10, 2, 0, 3, 11},
-        {17, 7, 4, 8, 18},
-        {23, 19, 12, 20, 24}
-    };
-
     // ── Vacuum data ────────────────────────────────────────────────
     private static final Map<String, Double> VACUUM_RANGES = new LinkedHashMap<>();
     static {
@@ -142,7 +142,6 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     private int killTicks = 0;
     private int equipDelay = 0;
     private int scanDelay = 0;
-    private int stuckTicks = 0;
     private int killsThisSession = 0;
     private int previousSlot = -1;
     private int trackerTicks = 0;
@@ -153,11 +152,17 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     private int plotSearchIndex = 0;
     private int plotSearchTrackerCooldown = 0;
     private int pathFailures = 0;
+    private int antiStuckTicks = 0;
+    private int antiStuckNudgeTicks = 0;
+    private int antiStuckAttempts = 0;
     private int scoreboardPests = -1;
     private boolean trackerAttempted = false;
     private boolean trackerFromPlotSearch = false;
     private boolean autoRewarpSent = false;
     private Vec3d lastPathFailureTarget = null;
+    private Vec3d antiStuckLastPos = null;
+    private Vec3d antiStuckTarget = null;
+    private Float antiStuckEscapeYaw = null;
 
     // ── Render data (for PathRenderer) ─────────────────────────────
     private static volatile List<PestInfo> renderPests = null;
@@ -221,6 +226,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             plotSearchIndex = 0;
             plotSearchTrackerCooldown = 0;
             pathFailures = 0;
+            resetAntiStuck();
             scoreboardPests = -1;
             trackerAttempted = false;
             trackerFromPlotSearch = false;
@@ -265,6 +271,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         plotSearchIndex = 0;
         plotSearchTrackerCooldown = 0;
         pathFailures = 0;
+        resetAntiStuck();
         trackerAttempted = false;
         trackerFromPlotSearch = false;
         lastPathFailureTarget = null;
@@ -465,6 +472,10 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             requestFlyPathTo(client, target);
         }
 
+        if (tickAntiStuck(client, target, "plot sweep")) {
+            return;
+        }
+
         if (!flyProcessor.isDone()) {
             flyProcessor.tick(client, (float) rotSpeed.getValue());
         }
@@ -572,6 +583,10 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             requestFlyPathTo(client, trackerWaypoint);
         }
 
+        if (tickAntiStuck(client, trackerWaypoint, "tracker trail")) {
+            return;
+        }
+
         if (!flyProcessor.isDone()) {
             flyProcessor.tick(client, (float) rotSpeed.getValue());
         }
@@ -597,7 +612,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         debugMsg("Equipped vacuum: " + vacName + " (range " + vacuumRange + ")");
 
         state = State.FLY_TO_PEST;
-        stuckTicks = 0;
+        resetAntiStuck();
         requestFlyPath(client);
     }
 
@@ -631,26 +646,15 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             requestFlyPath(client);
         }
 
+        Vec3d target = currentPestPos == null ? null : getPestHoverTarget(currentPestPos);
+        if (tickAntiStuck(client, target, "pest flight")) {
+            return;
+        }
+
         if (!flyProcessor.isDone()) {
             flyProcessor.tick(client, (float) rotSpeed.getValue());
         }
-
-        // Stuck check during flight
-        if (lastFlyPos != null) {
-            double moved = lastFlyPos.squaredDistanceTo(client.player.getX(), client.player.getY(), client.player.getZ());
-            stuckTicks = moved < 0.005 ? stuckTicks + 1 : 0;
-        }
-        lastFlyPos = playerPos(client);
-
-        if (stuckTicks > 100) {
-            debugMsg("Stuck during flight, repathing...");
-            stuckTicks = 0;
-            flyProcessor.stop();
-            requestFlyPath(client);
-        }
     }
-
-    private Vec3d lastFlyPos = null;
 
     // ═══════════════════════════════════════════════════ APPROACH PEST
 
@@ -667,7 +671,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         if (dist > vacuumRange + 2.0) {
             state = State.FLY_TO_PEST;
             releaseRotation(client);
-            stuckTicks = 0;
+            resetAntiStuck();
             requestFlyPath(client);
             return;
         }
@@ -974,6 +978,201 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
 
     // ═══════════════════════════════════════════════════ Pathfinding
 
+    private boolean tickAntiStuck(MinecraftClient client, Vec3d target, String reason) {
+        if (client.player == null) return false;
+
+        if (antiStuckNudgeTicks > 0) {
+            antiStuckNudgeTicks--;
+            float escapeYaw = antiStuckEscapeYaw != null ? antiStuckEscapeYaw : client.player.getYaw() + 180.0f;
+            applyAntiStuckMovement(client, escapeYaw);
+            InputUtils.setSprint(false);
+            InputUtils.setJump(true);
+            InputUtils.setSneak(false);
+
+            if (antiStuckNudgeTicks == 0) {
+                InputUtils.releaseAll();
+                antiStuckTicks = 0;
+                antiStuckLastPos = null;
+                requestFlyPathTo(client, target);
+            }
+            return true;
+        }
+
+        if (target == null || pathing || flyProcessor.isDone()) {
+            antiStuckTicks = 0;
+            antiStuckLastPos = null;
+            return false;
+        }
+
+        if (antiStuckTarget == null || antiStuckTarget.squaredDistanceTo(target) > ANTI_STUCK_TARGET_CHANGE_SQ) {
+            antiStuckTarget = target;
+            antiStuckAttempts = 0;
+            antiStuckTicks = 0;
+            antiStuckLastPos = null;
+        }
+
+        Vec3d pos = playerPos(client);
+        if (antiStuckLastPos != null) {
+            double moved = antiStuckLastPos.squaredDistanceTo(pos);
+            if (moved < ANTI_STUCK_MIN_MOVE_SQ) {
+                antiStuckTicks++;
+            } else {
+                antiStuckTicks = 0;
+                antiStuckAttempts = 0;
+            }
+        }
+        antiStuckLastPos = pos;
+
+        if (antiStuckTicks < ANTI_STUCK_TICKS) {
+            return false;
+        }
+
+        flyProcessor.stop();
+        InputUtils.releaseAll();
+        antiStuckTicks = 0;
+        antiStuckLastPos = null;
+
+        if (antiStuckAttempts < ANTI_STUCK_MAX_NUDGES) {
+            antiStuckAttempts++;
+            antiStuckEscapeYaw = chooseAntiStuckEscapeYaw(client, target);
+            antiStuckNudgeTicks = ANTI_STUCK_NUDGE_TICKS;
+            debugMsg("Anti-stuck nudge during " + reason);
+            return true;
+        }
+
+        antiStuckAttempts = 0;
+        debugMsg("Anti-stuck repath during " + reason);
+        requestFlyPathTo(client, target);
+        return true;
+    }
+
+    private void resetAntiStuck() {
+        antiStuckTicks = 0;
+        antiStuckNudgeTicks = 0;
+        antiStuckAttempts = 0;
+        antiStuckLastPos = null;
+        antiStuckTarget = null;
+        antiStuckEscapeYaw = null;
+    }
+
+    private float chooseAntiStuckEscapeYaw(MinecraftClient client, Vec3d target) {
+        BlockPos intersecting = findIntersectingBlock(client);
+        if (intersecting != null) {
+            Direction side = findClosestClearSide(client, intersecting);
+            if (side != null) {
+                Vec3d escape = Vec3d.ofCenter(intersecting).add(
+                    side.getOffsetX() * ANTI_STUCK_ESCAPE_CHECK_DISTANCE,
+                    0.0,
+                    side.getOffsetZ() * ANTI_STUCK_ESCAPE_CHECK_DISTANCE
+                );
+                return yawTo(playerPos(client), escape);
+            }
+        }
+
+        Vec3d pos = playerPos(client);
+        float preferredYaw = target == null ? client.player.getYaw() + 180.0f : yawTo(pos, target);
+        float bestYaw = client.player.getYaw() + 180.0f;
+        float bestScore = Float.MAX_VALUE;
+
+        for (int offset = 0; offset < 360; offset += 20) {
+            float yaw = MathHelper.wrapDegrees(preferredYaw + offset);
+            if (!isEscapeDirectionClear(client, yaw)) continue;
+
+            float score = Math.abs(MathHelper.wrapDegrees(yaw - preferredYaw));
+            if (score < bestScore) {
+                bestScore = score;
+                bestYaw = yaw;
+            }
+        }
+
+        return bestYaw;
+    }
+
+    private void applyAntiStuckMovement(MinecraftClient client, float desiredYaw) {
+        float relYaw = MathHelper.wrapDegrees(desiredYaw - client.player.getYaw());
+
+        boolean forward = relYaw >= -67.5f && relYaw < 67.5f;
+        boolean left = relYaw >= 22.5f && relYaw < 157.5f;
+        boolean back = relYaw >= 112.5f || relYaw < -112.5f;
+        boolean right = relYaw >= -157.5f && relYaw < -22.5f;
+
+        InputUtils.setForward(forward);
+        InputUtils.setBack(back);
+        InputUtils.setLeft(left);
+        InputUtils.setRight(right);
+    }
+
+    private BlockPos findIntersectingBlock(MinecraftClient client) {
+        if (client.player == null || client.world == null) return null;
+
+        Box playerBox = client.player.getBoundingBox().expand(0.02, 0.0, 0.02);
+        BlockPos playerPos = client.player.getBlockPos();
+        BlockPos best = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = 0; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    BlockPos pos = playerPos.add(dx, dy, dz);
+                    if (isPassable(client, pos)) continue;
+
+                    Box blockBox = new Box(pos);
+                    if (!playerBox.intersects(blockBox)) continue;
+
+                    double distSq = Vec3d.ofCenter(pos).squaredDistanceTo(playerPos(client));
+                    if (distSq < bestDistSq) {
+                        bestDistSq = distSq;
+                        best = pos;
+                    }
+                }
+            }
+        }
+
+        return best;
+    }
+
+    private Direction findClosestClearSide(MinecraftClient client, BlockPos pos) {
+        Direction best = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (Direction direction : Direction.Type.HORIZONTAL) {
+            BlockPos adjacent = pos.offset(direction);
+            if (!isPassable(client, adjacent) || !isPassable(client, adjacent.up())) continue;
+
+            Vec3d side = Vec3d.ofCenter(pos).add(direction.getOffsetX() * 0.5, 0.0, direction.getOffsetZ() * 0.5);
+            double distSq = side.squaredDistanceTo(playerPos(client));
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                best = direction;
+            }
+        }
+
+        return best;
+    }
+
+    private boolean isEscapeDirectionClear(MinecraftClient client, float yaw) {
+        Vec3d pos = playerPos(client);
+        double radians = Math.toRadians(yaw);
+        double dx = -Math.sin(radians) * ANTI_STUCK_ESCAPE_CHECK_DISTANCE;
+        double dz = Math.cos(radians) * ANTI_STUCK_ESCAPE_CHECK_DISTANCE;
+
+        BlockPos feet = BlockPos.ofFloored(pos.x + dx, pos.y + 0.1, pos.z + dz);
+        BlockPos body = BlockPos.ofFloored(pos.x + dx, pos.y + 0.9, pos.z + dz);
+        BlockPos head = BlockPos.ofFloored(pos.x + dx, pos.y + 1.8, pos.z + dz);
+        return isPassable(client, feet) && isPassable(client, body) && isPassable(client, head);
+    }
+
+    private static float yawTo(Vec3d from, Vec3d to) {
+        double dx = to.x - from.x;
+        double dz = to.z - from.z;
+        return (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
+    }
+
+    private static boolean isPassable(MinecraftClient client, BlockPos pos) {
+        if (client.world == null) return true;
+        return client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty();
+    }
+
     private void requestFlyPath(MinecraftClient client) {
         if (pathing || currentPestPos == null) return;
         requestFlyPathTo(client, getPestHoverTarget(currentPestPos));
@@ -1227,6 +1426,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         plotSearchTrackerCooldown = 0;
         trackerAttempted = false;
         trackerFromPlotSearch = false;
+        resetAntiStuck();
         flyProcessor.stop();
         InputUtils.releaseAll();
         markAllowedTeleportCommand();
@@ -1260,6 +1460,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         plotSearchTrackerCooldown = 0;
         pathFailures = 0;
         lastPathFailureTarget = null;
+        resetAntiStuck();
         flyProcessor.stop();
         InputUtils.releaseAll();
         state = State.SEARCH_PLOT;
@@ -1279,6 +1480,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         plotSearchTicks = 0;
         plotSearchSettleTicks = 0;
         plotSearchTrackerCooldown = 0;
+        resetAntiStuck();
 
         if (currentWarpPlot != null) {
             knownPestPlots.remove(currentWarpPlot.key);
@@ -1340,10 +1542,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     }
 
     private Integer getPlotIdAt(Vec3d pos) {
-        int xIndex = (int)Math.floor((pos.x + 48.0) / 96.0) + 2;
-        int zIndex = (int)Math.floor((pos.z + 48.0) / 96.0) + 2;
-        if (xIndex < 0 || xIndex >= PLOT_MAP[0].length || zIndex < 0 || zIndex >= PLOT_MAP.length) return null;
-        return PLOT_MAP[zIndex][xIndex];
+        return PlotUtils.getPlotIdAt(pos);
     }
 
     private void startTrackerActivation() {
@@ -1358,6 +1557,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         trackerWaypoint = null;
         pathFailures = 0;
         lastPathFailureTarget = null;
+        resetAntiStuck();
         trackerFromPlotSearch = fromPlotSearch;
         state = State.ACTIVATE_TRACKER;
         debugMsg(fromPlotSearch ? "Activating Pest Tracker during plot sweep..." : "Activating Pest Tracker...");
@@ -1435,6 +1635,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         flyProcessor.stop();
         InputUtils.releaseAll();
         state = State.SEARCH_PLOT;
+        resetAntiStuck();
 
         if (plotSearchIndex >= plotSearchPoints.size()) {
             finishPlotSearch(client);
@@ -1608,6 +1809,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         plotSearchIndex = 0;
         plotSearchTrackerCooldown = 0;
         trackerFromPlotSearch = false;
+        resetAntiStuck();
         scoreboardPests = 0;
     }
 
@@ -1636,6 +1838,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         renderTarget = pest;
         pathFailures = 0;
         lastPathFailureTarget = null;
+        resetAntiStuck();
     }
 
     private void onPestKilled() {
@@ -1909,14 +2112,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         }
 
         private static Vec3d centerForId(int id) {
-            for (int z = 0; z < PLOT_MAP.length; z++) {
-                for (int x = 0; x < PLOT_MAP[z].length; x++) {
-                    if (PLOT_MAP[z][x] == id) {
-                        return new Vec3d((x - 2) * 96.0, 84.0, (z - 2) * 96.0);
-                    }
-                }
-            }
-            return null;
+            return PlotUtils.getPlotCenter(id, 84.0);
         }
     }
 
