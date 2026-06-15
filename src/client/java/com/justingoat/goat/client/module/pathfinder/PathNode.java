@@ -9,6 +9,8 @@ public class PathNode {
         STEP_UP,
         DROP,
         JUMP_ACROSS,
+        SPRINT_JUMP,
+        SWIM,
         CLIMB
     }
 

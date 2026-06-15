@@ -1,6 +1,7 @@
 package com.justingoat.goat.client.module.pathfinder;
 
 import com.justingoat.goat.client.utils.InputUtils;
+import it.unimi.dsi.fastutil.longs.Long2DoubleOpenHashMap;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.world.ClientWorld;
@@ -283,7 +284,8 @@ public class EtherwarpPathfinder {
 
     static EtherwarpPath search(ClientWorld world, BlockPos start, BlockPos goal, int maxIterations) {
         PriorityQueue<ENode> open = new PriorityQueue<>(Comparator.comparingDouble(n -> n.fCost));
-        Map<Long, Double> best = new HashMap<>();
+        Long2DoubleOpenHashMap best = new Long2DoubleOpenHashMap();
+        best.defaultReturnValue(Double.POSITIVE_INFINITY);
 
         ENode startNode = new ENode(start, 0, heuristic(start, goal), null, 0, 0);
         open.add(startNode);
@@ -295,8 +297,8 @@ public class EtherwarpPathfinder {
             ENode current = open.poll();
             iterations++;
 
-            Double b = best.get(current.pos.asLong());
-            if (b != null && current.gCost > b + 0.001) continue;
+            double b = best.get(current.pos.asLong());
+            if (current.gCost > b + 0.001) continue;
 
             if (current.pos.equals(goal)) {
                 return reconstructPath(world, current);
@@ -328,8 +330,8 @@ public class EtherwarpPathfinder {
                     if (!seen.add(landing.asLong())) continue;
 
                     double newG = current.gCost + 1.0;
-                    Double existing = best.get(landing.asLong());
-                    if (existing != null && newG >= existing) continue;
+                    double existing = best.get(landing.asLong());
+                    if (newG >= existing) continue;
 
                     best.put(landing.asLong(), newG);
                     double h = heuristic(landing, goal);

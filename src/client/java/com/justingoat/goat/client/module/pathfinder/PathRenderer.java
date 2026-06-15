@@ -44,6 +44,8 @@ public class PathRenderer {
         {1.0f,  0.3f, 0.9f,  0.9f},  // JUMP_ACROSS — magenta
         {1.0f,  0.6f, 0.2f,  0.9f},  // CLIMB — orange
     };
+    private static final float[] COLOR_SPRINT_JUMP = {0.8f, 0.35f, 1.0f, 0.9f};
+    private static final float[] COLOR_SWIM = {0.1f, 0.65f, 1.0f, 0.9f};
     private static final float[] COLOR_CURRENT = {1.0f, 1.0f, 1.0f, 1.0f}; // white
     private static final float[] COLOR_LINE    = {0.3f, 0.85f, 1.0f, 0.6f}; // light blue
     private static final float[] COLOR_FORAGING_TARGET = {1.0f, 0.9f, 0.1f, 0.75f};
@@ -337,6 +339,8 @@ public class PathRenderer {
             case DROP -> COLORS[2];
             case JUMP_ACROSS -> COLORS[3];
             case CLIMB -> COLORS[4];
+            case SPRINT_JUMP -> COLOR_SPRINT_JUMP;
+            case SWIM -> COLOR_SWIM;
         };
     }
 

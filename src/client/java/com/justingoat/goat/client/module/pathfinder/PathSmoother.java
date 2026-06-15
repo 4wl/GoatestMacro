@@ -1,11 +1,13 @@
 package com.justingoat.goat.client.module.pathfinder;
 
 import net.minecraft.block.BlockState;
-import net.minecraft.block.FluidBlock;
-import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.registry.tag.FluidTags;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShape;
+import net.minecraft.world.chunk.WorldChunk;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,6 +17,10 @@ public class PathSmoother {
     private static final int MAX_SKIP = 10;
 
     public static List<PathNode> smooth(List<PathNode> rawPath) {
+        return smooth(rawPath, false);
+    }
+
+    public static List<PathNode> smooth(List<PathNode> rawPath, boolean allowWater) {
         if (rawPath == null || rawPath.size() <= 2) return rawPath;
 
         MinecraftClient client = MinecraftClient.getInstance();
@@ -35,7 +41,7 @@ public class PathSmoother {
                 if (to.getMoveType() != PathNode.MoveType.WALK) continue;
                 if (from.getPos().getY() != to.getPos().getY()) continue;
 
-                if (hasLineOfWalk(client, from.getPos(), to.getPos())) {
+                if (hasLineOfWalk(client, from.getPos(), to.getPos(), allowWater)) {
                     farthest = probe;
                     break;
                 }
@@ -107,29 +113,50 @@ public class PathSmoother {
         return Math.acos(cosAngle);
     }
 
-    private static boolean hasLineOfWalk(MinecraftClient client, BlockPos from, BlockPos to) {
-        int dx = to.getX() - from.getX();
-        int dz = to.getZ() - from.getZ();
-        int steps = Math.max(Math.abs(dx), Math.abs(dz));
-        if (steps == 0) return true;
+    private static boolean hasLineOfWalk(MinecraftClient client, BlockPos from, BlockPos to, boolean allowWater) {
+        Vec3d a = new Vec3d(from.getX() + 0.5, from.getY(), from.getZ() + 0.5);
+        Vec3d b = new Vec3d(to.getX() + 0.5, to.getY(), to.getZ() + 0.5);
+        double dx = b.x - a.x;
+        double dz = b.z - a.z;
+        double len = Math.sqrt(dx * dx + dz * dz);
+        if (len < 0.01) return true;
 
-        for (int i = 1; i < steps; i++) {
-            double t = (double) i / steps;
-            int x = from.getX() + (int) Math.round(dx * t);
-            int z = from.getZ() + (int) Math.round(dz * t);
-            int y = from.getY();
+        double ox = -dz / len * 0.3;
+        double oz = dx / len * 0.3;
+        return hasWalkRay(client, a, b, 0.0, 0.0, allowWater)
+            && hasWalkRay(client, a, b, ox, oz, allowWater)
+            && hasWalkRay(client, a, b, -ox, -oz, allowWater);
+    }
+
+    private static boolean hasWalkRay(MinecraftClient client, Vec3d from, Vec3d to,
+                                      double offsetX, double offsetZ, boolean allowWater) {
+        double dx = to.x - from.x;
+        double dz = to.z - from.z;
+        double dist = Math.sqrt(dx * dx + dz * dz);
+        for (double d = 0.25; d < dist; d += 0.25) {
+            double t = d / dist;
+            int x = (int) Math.floor(from.x + dx * t + offsetX);
+            int z = (int) Math.floor(from.z + dz * t + offsetZ);
+            int y = (int) Math.floor(from.y);
 
             BlockPos ground = new BlockPos(x, y, z);
             BlockPos feet = ground.up();
             BlockPos head = ground.up(2);
 
-            if (!isSolid(client, ground)) return false;
+            if (!isChunkLoaded(client, ground) || !isChunkLoaded(client, feet) || !isChunkLoaded(client, head)) return false;
+            if (!isStandableGround(client, ground)) return false;
             if (!isPassable(client, feet)) return false;
             if (!isPassable(client, head)) return false;
-            if (isLiquid(client, feet)) return false;
+            if (isLava(client, feet)) return false;
+            if (!allowWater && isWater(client, feet)) return false;
         }
-
         return true;
+    }
+
+    private static boolean isChunkLoaded(MinecraftClient c, BlockPos pos) {
+        if (c.world == null) return false;
+        WorldChunk chunk = c.world.getChunkManager().getWorldChunk(pos.getX() >> 4, pos.getZ() >> 4);
+        return chunk != null;
     }
 
     private static boolean isSolid(MinecraftClient c, BlockPos pos) {
@@ -138,16 +165,25 @@ public class PathSmoother {
         return !shape.isEmpty();
     }
 
+    private static boolean isStandableGround(MinecraftClient c, BlockPos pos) {
+        BlockState state = c.world.getBlockState(pos);
+        VoxelShape shape = state.getCollisionShape(c.world, pos);
+        return !shape.isEmpty() && shape.getMax(Direction.Axis.Y) <= 1.0;
+    }
+
     private static boolean isPassable(MinecraftClient c, BlockPos pos) {
         BlockState state = c.world.getBlockState(pos);
         VoxelShape shape = state.getCollisionShape(c.world, pos);
         return shape.isEmpty();
     }
 
-    private static boolean isLiquid(MinecraftClient c, BlockPos pos) {
+    private static boolean isWater(MinecraftClient c, BlockPos pos) {
         BlockState state = c.world.getBlockState(pos);
-        return state.getBlock() instanceof FluidBlock
-            || state.isOf(Blocks.WATER)
-            || state.isOf(Blocks.LAVA);
+        return state.getFluidState().isIn(FluidTags.WATER);
+    }
+
+    private static boolean isLava(MinecraftClient c, BlockPos pos) {
+        BlockState state = c.world.getBlockState(pos);
+        return state.getFluidState().isIn(FluidTags.LAVA);
     }
 }

@@ -69,6 +69,7 @@ public class GoatClient implements ClientModInitializer {
             new HelpCommand(),
             new GotoCommand(),
             new FlytoCommand(),
+            new WaypointCommand(),
             new EtherwarpCommand(),
             new SetStartCommand(),
             new SetEndCommand(),

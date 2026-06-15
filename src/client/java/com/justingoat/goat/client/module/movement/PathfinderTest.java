@@ -1,5 +1,7 @@
 package com.justingoat.goat.client.module.movement;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -20,6 +22,7 @@ public class PathfinderTest extends GoatModule {
     private final PathProcessor pathProcessor = new PathProcessor();
     private final FlyPathProcessor flyProcessor = new FlyPathProcessor();
     private final EtherwarpPathfinder etherwarpPathfinder = new EtherwarpPathfinder();
+    private final List<BlockPos> waypoints = new ArrayList<>();
     private volatile boolean computing = false;
 
     private final ModeValue mode;
@@ -62,6 +65,28 @@ public class PathfinderTest extends GoatModule {
     public int getStuckThreshold() { return (int) stuckThreshold.getValue(); }
     public boolean isAoteEnabled() { return aoteEnabled.getValue(); }
 
+    public void addWaypoint(BlockPos pos) {
+        waypoints.add(pos.toImmutable());
+    }
+
+    public boolean removeWaypoint(int index) {
+        if (index < 0 || index >= waypoints.size()) return false;
+        waypoints.remove(index);
+        return true;
+    }
+
+    public void clearWaypoints() {
+        waypoints.clear();
+    }
+
+    public List<BlockPos> getWaypoints() {
+        return Collections.unmodifiableList(new ArrayList<>(waypoints));
+    }
+
+    public boolean hasWaypoints() {
+        return !waypoints.isEmpty();
+    }
+
     @Override
     public void setEnabled(boolean enabled) {
         super.setEnabled(enabled);
@@ -83,6 +108,14 @@ public class PathfinderTest extends GoatModule {
     }
 
     public void pathTargetWalk(BlockPos target) {
+        pathTargetWalk(target, false);
+    }
+
+    public void pathTargetWalkAllowWater(BlockPos target) {
+        pathTargetWalk(target, true);
+    }
+
+    private void pathTargetWalk(BlockPos target, boolean allowWater) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return;
 
@@ -91,6 +124,8 @@ public class PathfinderTest extends GoatModule {
         etherwarpPathfinder.cancel();
 
         BlockPos start = client.player.getBlockPos().down();
+        List<BlockPos> route = new ArrayList<>(waypoints);
+        route.add(target.toImmutable());
         client.player.sendMessage(
             Text.literal("§7[Goat] Calculating walk path to " + target.toShortString() + "..."), false);
         this.setEnabled(true);
@@ -99,10 +134,9 @@ public class PathfinderTest extends GoatModule {
         int nodes = getMaxNodes();
         int drop = getMaxDrop();
 
-        CompletableFuture.supplyAsync(() -> {
-            List<PathNode> raw = AStarPathfinder.computePath(start, target, nodes, drop);
-            return raw != null ? PathSmoother.smooth(raw) : null;
-        }).thenAccept(path -> client.execute(() -> {
+        CompletableFuture.supplyAsync(() ->
+            computeChainedWalkPath(start, route, nodes, drop, allowWater)
+        ).thenAccept(path -> client.execute(() -> {
             computing = false;
             if (path != null) {
                 client.player.sendMessage(
@@ -114,6 +148,26 @@ public class PathfinderTest extends GoatModule {
                 this.setEnabled(false);
             }
         }));
+    }
+
+    private List<PathNode> computeChainedWalkPath(BlockPos start, List<BlockPos> route,
+                                                  int maxNodes, int maxDrop, boolean allowWater) {
+        List<PathNode> combined = new ArrayList<>();
+        BlockPos segmentStart = start;
+
+        for (BlockPos segmentEnd : route) {
+            List<PathNode> raw = AStarPathfinder.computePath(segmentStart, segmentEnd, maxNodes, maxDrop, allowWater);
+            if (raw == null || raw.isEmpty()) return null;
+
+            if (combined.isEmpty()) {
+                combined.addAll(raw);
+            } else {
+                combined.addAll(raw.subList(1, raw.size()));
+            }
+            segmentStart = raw.get(raw.size() - 1).getPos();
+        }
+
+        return combined.isEmpty() ? null : PathSmoother.smooth(combined, allowWater);
     }
 
     public void pathTargetFly(BlockPos target) {

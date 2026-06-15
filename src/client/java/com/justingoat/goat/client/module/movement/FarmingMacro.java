@@ -54,6 +54,9 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     private static final double ANTI_STUCK_ESCAPE_CHECK_DISTANCE = 1.25;
     private static final double BPS_STUCK_THRESHOLD = 0.35;
     private static final long BPS_STUCK_DURATION_MS = 2200L;
+    private static final int S_DIRECTION_SCAN_DISTANCE = 180;
+    private static final int S_CROP_DIRECTION_SCAN_FORWARD = 5;
+    private static final int S_MATURE_WHEAT_AGE = 7;
 
     // ── States ──
     private enum State {
@@ -664,22 +667,96 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     }
 
     private State sCalculateDirection(MinecraftClient client) {
-        // Check which side has walkable space (crops)
-        if (sIsRightWalkable(client)) return State.S_RIGHT;
-        if (sIsLeftWalkable(client)) return State.S_LEFT;
+        boolean rightWalkable = sIsRightWalkable(client);
+        boolean leftWalkable = sIsLeftWalkable(client);
 
-        // Scan outward for walls to pick side
-        for (int i = 1; i < 180; i++) {
-            BlockPos rightPos = sGetRelativeBlockPos(client, i, 0, 0);
-            BlockPos leftPos = sGetRelativeBlockPos(client, -i, 0, 0);
-            boolean rightBlocked = !sCanWalkThrough(client, rightPos);
-            boolean leftBlocked = !sCanWalkThrough(client, leftPos);
+        if (rightWalkable && !leftWalkable) return State.S_RIGHT;
+        if (leftWalkable && !rightWalkable) return State.S_LEFT;
+        if (!rightWalkable && !leftWalkable) return State.S_NONE;
 
-            if (rightBlocked && !leftBlocked) return State.S_RIGHT;
-            if (leftBlocked && !rightBlocked) return State.S_LEFT;
-            if (rightBlocked && leftBlocked) break;
+        SShapeCropScore rightScore = sScoreCropSide(client, 1);
+        SShapeCropScore leftScore = sScoreCropSide(client, -1);
+        int cropCompare = leftScore.compareTo(rightScore);
+        if (cropCompare > 0) {
+            debugMsg("S-Shape: mature crops left=" + leftScore + ", right=" + rightScore + ", starting LEFT");
+            return State.S_LEFT;
+        }
+        if (cropCompare < 0) {
+            debugMsg("S-Shape: mature crops left=" + leftScore + ", right=" + rightScore + ", starting RIGHT");
+            return State.S_RIGHT;
+        }
+
+        int rightWallDistance = sDistanceToBlockedSide(client, 1);
+        int leftWallDistance = sDistanceToBlockedSide(client, -1);
+
+        if (rightWallDistance < leftWallDistance) {
+            debugMsg("S-Shape: right wall closer, starting LEFT");
+            return State.S_LEFT;
+        }
+        if (leftWallDistance < rightWallDistance) {
+            debugMsg("S-Shape: left wall closer, starting RIGHT");
+            return State.S_RIGHT;
         }
         return State.S_NONE;
+    }
+
+    private record SShapeCropScore(int matureCount, int totalAge, int cropCount) implements Comparable<SShapeCropScore> {
+        @Override
+        public int compareTo(SShapeCropScore other) {
+            int matureCompare = Integer.compare(matureCount, other.matureCount);
+            if (matureCompare != 0) return matureCompare;
+
+            int ageCompare = Integer.compare(totalAge, other.totalAge);
+            if (ageCompare != 0) return ageCompare;
+
+            return Integer.compare(cropCount, other.cropCount);
+        }
+    }
+
+    private SShapeCropScore sScoreCropSide(MinecraftClient client, int rightDirection) {
+        int matureCount = 0;
+        int totalAge = 0;
+        int cropCount = 0;
+
+        for (int forward = 0; forward <= S_CROP_DIRECTION_SCAN_FORWARD; forward++) {
+            BlockPos pos = sGetRelativeBlockPos(client, rightDirection, 0, forward);
+            int age = getSShapeWheatAge(client, pos);
+            if (age < 0) continue;
+
+            cropCount++;
+            totalAge += age;
+            if (age >= S_MATURE_WHEAT_AGE) {
+                matureCount++;
+            }
+        }
+
+        return new SShapeCropScore(matureCount, totalAge, cropCount);
+    }
+
+    private int getSShapeWheatAge(MinecraftClient client, BlockPos pos) {
+        int age = getWheatAge(client, pos);
+        if (age >= 0) return age;
+
+        age = getWheatAge(client, pos.up());
+        if (age >= 0) return age;
+
+        return getWheatAge(client, pos.down());
+    }
+
+    private int getWheatAge(MinecraftClient client, BlockPos pos) {
+        String id = getRegistryId(client, pos);
+        if (!"minecraft:wheat".equals(id)) return -1;
+        return getCropAge(client, pos);
+    }
+
+    private int sDistanceToBlockedSide(MinecraftClient client, int rightDirection) {
+        for (int i = 1; i <= S_DIRECTION_SCAN_DISTANCE; i++) {
+            BlockPos pos = sGetRelativeBlockPos(client, i * rightDirection, 0, 0);
+            if (!sCanWalkThrough(client, pos)) {
+                return i;
+            }
+        }
+        return Integer.MAX_VALUE;
     }
 
     // ══════════════════════════════════════════════════════════════

@@ -3,6 +3,7 @@ package com.justingoat.goat.client.module.pathfinder;
 import com.justingoat.goat.client.utils.InputUtils;
 import com.justingoat.goat.client.utils.RotationInterpolator;
 import com.justingoat.goat.client.utils.RotationUtils;
+import it.unimi.dsi.fastutil.longs.Long2DoubleOpenHashMap;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -45,6 +46,7 @@ public class FlyPathProcessor {
     private static final int MAX_FLY_RETRIES = 5;
     private static final double LOOKAHEAD_DIST = 10.0;
     private static final float AIM_DEADZONE = 1.5f;
+    private static final double LOS_STEP = 0.25;
 
     private int stuckTicks = 0;
     private Vec3d lastPos = null;
@@ -515,6 +517,8 @@ public class FlyPathProcessor {
         {1,0,1},{1,0,-1},{-1,0,1},{-1,0,-1},
         {1,1,0},{-1,1,0},{0,1,1},{0,1,-1},
         {1,-1,0},{-1,-1,0},{0,-1,1},{0,-1,-1},
+        {1,1,1},{1,1,-1},{-1,1,1},{-1,1,-1},
+        {1,-1,1},{1,-1,-1},{-1,-1,1},{-1,-1,-1},
     };
 
     public static CompletableFuture<List<Vec3d>> computePathAsync(BlockPos start, BlockPos end, int maxNodes) {
@@ -534,7 +538,8 @@ public class FlyPathProcessor {
         if (client.world == null) return null;
 
         PriorityQueue<FlyNode> open = new PriorityQueue<>(Comparator.comparingDouble(n -> n.fCost));
-        Map<Long, Double> best = new HashMap<>();
+        Long2DoubleOpenHashMap best = new Long2DoubleOpenHashMap();
+        best.defaultReturnValue(Double.POSITIVE_INFINITY);
 
         FlyNode startNode = new FlyNode(start, 0, heuristic(start, end), null);
         open.add(startNode);
@@ -545,8 +550,8 @@ public class FlyPathProcessor {
             FlyNode cur = open.poll();
             eval++;
 
-            Double b = best.get(cur.pos.asLong());
-            if (b != null && cur.gCost > b) continue;
+            double b = best.get(cur.pos.asLong());
+            if (cur.gCost > b) continue;
 
             if (cur.pos.getX() == end.getX() && cur.pos.getZ() == end.getZ()
                 && Math.abs(cur.pos.getY() - end.getY()) <= 1) {
@@ -559,8 +564,8 @@ public class FlyPathProcessor {
 
                 double cost = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
                 double newG = cur.gCost + cost;
-                Double existing = best.get(np.asLong());
-                if (existing != null && newG >= existing) continue;
+                double existing = best.get(np.asLong());
+                if (newG >= existing) continue;
 
                 best.put(np.asLong(), newG);
                 open.add(new FlyNode(np, newG, newG + heuristic(np, end), cur));
@@ -630,8 +635,7 @@ public class FlyPathProcessor {
         double dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
         double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (dist < 0.1) return true;
-        double step = 0.5;
-        for (double d = step; d < dist; d += step) {
+        for (double d = LOS_STEP; d < dist; d += LOS_STEP) {
             double t = d / dist;
             BlockPos pos = BlockPos.ofFloored(from.x + dx * t, from.y + dy * t, from.z + dz * t);
             BlockState state = client.world.getBlockState(pos);

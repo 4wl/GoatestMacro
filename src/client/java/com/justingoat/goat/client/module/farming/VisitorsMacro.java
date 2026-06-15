@@ -32,7 +32,10 @@ import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Hand;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
@@ -109,6 +112,9 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     private final RotationUtils rotation = new RotationUtils();
     private static final Pattern ITEM_AMOUNT_AFTER = Pattern.compile("^(?<name>.+?)\\s+x(?<amount>[\\d,]+)$", Pattern.CASE_INSENSITIVE);
     private static final Pattern ITEM_AMOUNT_BEFORE = Pattern.compile("^\\+?(?<amount>[\\d,]+)\\s+(?<name>.+)$", Pattern.CASE_INSENSITIVE);
+    private static final double ANTI_STUCK_ESCAPE_CHECK_DISTANCE = 1.35;
+    private static final float ROTATION_RETARGET_YAW_THRESHOLD = 3.0f;
+    private static final float ROTATION_RETARGET_PITCH_THRESHOLD = 2.0f;
 
     private final List<String> visitors = new ArrayList<>();
     private final Set<String> servedVisitors = new HashSet<>();
@@ -119,6 +125,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     private BazaarBuyState bazaarBuyState = BazaarBuyState.START;
     private VisitorTarget currentVisitor = null;
     private VisitorItem activeBazaarItem = null;
+    private int activeBazaarInitialCount = 0;
     private long lastActionTime = 0L;
     private long lastVisitorRefresh = 0L;
     private long bazaarStateStarted = 0L;
@@ -126,6 +133,9 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     private int recoveryTicks = 0;
     private int noProgressTicks = 0;
     private Vec3d lastProgressPos = null;
+    private Float antiStuckEscapeYaw = null;
+    private float lastLookTargetYaw = Float.NaN;
+    private float lastLookTargetPitch = Float.NaN;
     private boolean traveled = false;
     private boolean bazaarCaptureAnnounced = false;
     private boolean signTyped = false;
@@ -460,6 +470,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
                 lastActionTime = System.currentTimeMillis();
                 return;
             }
+            activeBazaarInitialCount = countInventoryItem(activeBazaarItem.name());
             setBazaarBuyState(BazaarBuyState.START);
         }
 
@@ -469,6 +480,19 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         }
 
         if (client.currentScreen instanceof AbstractSignEditScreen signScreen) {
+            if (bazaarBuyState == BazaarBuyState.WAIT_AFTER_BUY) {
+                signScreen.close();
+                lastActionTime = System.currentTimeMillis() + 600L;
+                return;
+            }
+            if (bazaarBuyState == BazaarBuyState.CONFIRM_BUY) {
+                signScreen.keyPressed(new KeyInput(GLFW.GLFW_KEY_ENTER, 0, 0));
+                if (System.currentTimeMillis() - bazaarStateStarted > 1200L) {
+                    signScreen.close();
+                }
+                lastActionTime = System.currentTimeMillis() + 500L;
+                return;
+            }
             handleSignInput(signScreen);
             return;
         }
@@ -578,19 +602,23 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         }
 
         signScreen.keyPressed(new KeyInput(GLFW.GLFW_KEY_ENTER, 0, 0));
-        signScreen.close();
         setBazaarBuyState(BazaarBuyState.CONFIRM_BUY);
         lastActionTime = System.currentTimeMillis() + 900L;
     }
 
     private void handleConfirmBuy(GenericContainerScreenHandler handler, String lowerTitle) {
-        if (lowerTitle.contains("confirm") && !lowerTitle.contains("instant buy")) {
-            setBazaarBuyState(BazaarBuyState.WARNING_CONFIRM);
+        if (hasReceivedActiveBazaarItem()) {
+            finishActiveBazaarPurchase();
             return;
         }
 
         Integer confirmSlot = findConfirmBuySlot(handler);
-        if (confirmSlot == null) return;
+        if (confirmSlot == null) {
+            if (!lowerTitle.contains("instant buy")) {
+                setBazaarBuyState(BazaarBuyState.CLICK_INSTANT_BUY);
+            }
+            return;
+        }
 
         double actualCost = extractCoinCost(getLoreLines(getStack(handler, confirmSlot)));
         if (actualCost <= 0.0) {
@@ -638,11 +666,21 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     }
 
     private Integer findConfirmBuySlot(GenericContainerScreenHandler handler) {
-        Integer customAmount = findContainerSlot(handler, "custom amount", false);
-        if (customAmount != null) return customAmount;
         Integer confirm = findContainerSlot(handler, "confirm", false);
         if (confirm != null) return confirm;
         return findContainerSlot(handler, "buy instantly", false);
+    }
+
+    private boolean hasReceivedActiveBazaarItem() {
+        return activeBazaarItem != null
+            && countInventoryItem(activeBazaarItem.name()) >= activeBazaarInitialCount + activeBazaarItem.amount();
+    }
+
+    private void finishActiveBazaarPurchase() {
+        ChatUtils.sendInfoMessage("[Visitors] bought " + activeBazaarItem.name() + " x" + activeBazaarItem.amount()
+            + " for about " + SkyBlockUtils.formatCoins(Math.round(estimateBazaarCost(activeBazaarItem))));
+        setBazaarBuyState(BazaarBuyState.WAIT_AFTER_BUY);
+        lastActionTime = System.currentTimeMillis() + 1200L;
     }
 
     private Integer findContainerSlot(GenericContainerScreenHandler handler, String needle, boolean includeLore) {
@@ -1030,11 +1068,22 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         Vec3d eye = client.player.getEyePos();
         Vec3d targetPos = target.getBoundingBox().getCenter();
         float[] look = RotationUtils.lookAt(eye.x, eye.y, eye.z, targetPos.x, targetPos.y, targetPos.z);
-        rotation.setTarget(look[0], look[1]);
+        if (shouldRetargetRotation(look[0], look[1])) {
+            rotation.setTarget(look[0], look[1]);
+            lastLookTargetYaw = look[0];
+            lastLookTargetPitch = look[1];
+        }
         rotation.setSpeed(speed);
         rotation.tick();
         client.player.setYaw(rotation.getCurrentYaw());
         client.player.setPitch(rotation.getCurrentPitch());
+    }
+
+    private boolean shouldRetargetRotation(float yaw, float pitch) {
+        if (Float.isNaN(lastLookTargetYaw) || Float.isNaN(lastLookTargetPitch)) return true;
+        float yawDelta = Math.abs(MathHelper.wrapDegrees(yaw - lastLookTargetYaw));
+        float pitchDelta = Math.abs(pitch - lastLookTargetPitch);
+        return yawDelta >= ROTATION_RETARGET_YAW_THRESHOLD || pitchDelta >= ROTATION_RETARGET_PITCH_THRESHOLD;
     }
 
     private void updateAntiStuck(MinecraftClient client) {
@@ -1049,24 +1098,145 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         if (noProgressTicks < 35) return;
 
         noProgressTicks = 0;
-        recoveryTicks = 12;
+        recoveryTicks = 14;
+        antiStuckEscapeYaw = chooseAntiStuckEscapeYaw(client);
         InputUtils.releaseAll();
         debugMsg("AntiStuck recovery");
     }
 
     private void tickRecovery(MinecraftClient client) {
         recoveryTicks--;
-        InputUtils.setBack(recoveryTicks > 5);
-        InputUtils.setLeft(recoveryTicks <= 8);
-        InputUtils.setJump(recoveryTicks > 2);
         if (currentVisitor != null) {
-            lookAt(client, currentVisitor.clickTarget(), 0.8f);
+            lookAt(client, currentVisitor.clickTarget(), 0.45f);
         }
+        if (antiStuckEscapeYaw == null) {
+            antiStuckEscapeYaw = chooseAntiStuckEscapeYaw(client);
+        }
+        applyAntiStuckMovement(client, antiStuckEscapeYaw);
+        InputUtils.setJump(recoveryTicks > 2);
         if (recoveryTicks <= 0) {
             InputUtils.releaseAll();
+            antiStuckEscapeYaw = null;
             resetMovementProgress(client);
             state = currentVisitor == null ? State.SELECT_VISITOR : State.MOVE_TO_VISITOR;
         }
+    }
+
+    private float chooseAntiStuckEscapeYaw(MinecraftClient client) {
+        BlockPos intersecting = findIntersectingBlock(client);
+        if (intersecting != null) {
+            Direction side = findClosestClearSide(client, intersecting);
+            if (side != null) {
+                Vec3d escape = Vec3d.ofCenter(intersecting).add(
+                    side.getOffsetX() * ANTI_STUCK_ESCAPE_CHECK_DISTANCE,
+                    0.0,
+                    side.getOffsetZ() * ANTI_STUCK_ESCAPE_CHECK_DISTANCE
+                );
+                return yawTo(playerPos(client), escape);
+            }
+        }
+
+        Vec3d pos = playerPos(client);
+        Vec3d target = currentVisitor == null ? null : currentVisitor.clickTarget().getBoundingBox().getCenter();
+        float preferredYaw = target == null ? MathHelper.wrapDegrees(client.player.getYaw() + 180.0f) : yawTo(pos, target);
+        float bestYaw = MathHelper.wrapDegrees(client.player.getYaw() + 180.0f);
+        float bestScore = Float.MAX_VALUE;
+        int[] offsets = {0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180};
+
+        for (int offset : offsets) {
+            float yaw = MathHelper.wrapDegrees(preferredYaw + offset);
+            if (!isEscapeDirectionClear(client, yaw)) continue;
+
+            float score = Math.abs(MathHelper.wrapDegrees(yaw - preferredYaw));
+            if (score < bestScore) {
+                bestScore = score;
+                bestYaw = yaw;
+            }
+        }
+        return bestYaw;
+    }
+
+    private void applyAntiStuckMovement(MinecraftClient client, float desiredYaw) {
+        float relYaw = MathHelper.wrapDegrees(desiredYaw - client.player.getYaw());
+
+        boolean forward = relYaw >= -67.5f && relYaw < 67.5f;
+        boolean left = relYaw >= 22.5f && relYaw < 157.5f;
+        boolean back = relYaw >= 112.5f || relYaw < -112.5f;
+        boolean right = relYaw >= -157.5f && relYaw < -22.5f;
+
+        InputUtils.setForward(forward);
+        InputUtils.setBack(back);
+        InputUtils.setLeft(left);
+        InputUtils.setRight(right);
+    }
+
+    private BlockPos findIntersectingBlock(MinecraftClient client) {
+        if (client.player == null || client.world == null) return null;
+
+        Box playerBox = client.player.getBoundingBox().expand(0.02, 0.0, 0.02);
+        BlockPos playerBlock = client.player.getBlockPos();
+        BlockPos best = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = 0; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    BlockPos pos = playerBlock.add(dx, dy, dz);
+                    if (isPassable(client, pos)) continue;
+
+                    Box blockBox = new Box(pos);
+                    if (!playerBox.intersects(blockBox)) continue;
+
+                    double distSq = Vec3d.ofCenter(pos).squaredDistanceTo(playerPos(client));
+                    if (distSq < bestDistSq) {
+                        bestDistSq = distSq;
+                        best = pos;
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    private Direction findClosestClearSide(MinecraftClient client, BlockPos pos) {
+        Direction best = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (Direction direction : Direction.Type.HORIZONTAL) {
+            BlockPos adjacent = pos.offset(direction);
+            if (!isPassable(client, adjacent) || !isPassable(client, adjacent.up())) continue;
+
+            Vec3d side = Vec3d.ofCenter(pos).add(direction.getOffsetX() * 0.5, 0.0, direction.getOffsetZ() * 0.5);
+            double distSq = side.squaredDistanceTo(playerPos(client));
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                best = direction;
+            }
+        }
+        return best;
+    }
+
+    private boolean isEscapeDirectionClear(MinecraftClient client, float yaw) {
+        Vec3d pos = playerPos(client);
+        double radians = Math.toRadians(yaw);
+        double dx = -Math.sin(radians) * ANTI_STUCK_ESCAPE_CHECK_DISTANCE;
+        double dz = Math.cos(radians) * ANTI_STUCK_ESCAPE_CHECK_DISTANCE;
+
+        BlockPos feet = BlockPos.ofFloored(pos.x + dx, pos.y + 0.1, pos.z + dz);
+        BlockPos body = BlockPos.ofFloored(pos.x + dx, pos.y + 0.9, pos.z + dz);
+        BlockPos head = BlockPos.ofFloored(pos.x + dx, pos.y + 1.8, pos.z + dz);
+        return isPassable(client, feet) && isPassable(client, body) && isPassable(client, head);
+    }
+
+    private boolean isPassable(MinecraftClient client, BlockPos pos) {
+        if (client.world == null) return true;
+        return client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty();
+    }
+
+    private static float yawTo(Vec3d from, Vec3d to) {
+        double dx = to.x - from.x;
+        double dz = to.z - from.z;
+        return (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
     }
 
     private boolean clickSlot(GenericContainerScreenHandler handler, int slot) {
@@ -1101,6 +1271,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         lastProgressPos = client.player == null ? null : playerPos(client);
         noProgressTicks = 0;
         recoveryTicks = 0;
+        antiStuckEscapeYaw = null;
     }
 
     private void reset() {
@@ -1115,6 +1286,9 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         recoveryTicks = 0;
         noProgressTicks = 0;
         lastProgressPos = null;
+        antiStuckEscapeYaw = null;
+        lastLookTargetYaw = Float.NaN;
+        lastLookTargetPitch = Float.NaN;
         traveled = false;
         bazaarCaptureAnnounced = false;
         lastPriceWaitMessage = 0L;
@@ -1127,6 +1301,9 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         InputUtils.releaseAll();
         currentVisitor = null;
         state = State.WAITING;
+        antiStuckEscapeYaw = null;
+        lastLookTargetYaw = Float.NaN;
+        lastLookTargetPitch = Float.NaN;
     }
 
     private String cleanName(String name) {
