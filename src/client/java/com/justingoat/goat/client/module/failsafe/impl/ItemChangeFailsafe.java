@@ -25,6 +25,12 @@ public class ItemChangeFailsafe extends Failsafe {
             return;
         }
 
+        // PestCleaner intentionally switches from hoe to vacuum — suppress detection
+        if (isPestCleanerActive()) {
+            invalidToolSince = 0L;
+            return;
+        }
+
         ItemStack held = client.player.getMainHandStack();
         if (!held.isEmpty() && (held.getItem() instanceof HoeItem || held.getItem() instanceof AxeItem)) {
             invalidToolSince = 0L;
@@ -42,6 +48,11 @@ public class ItemChangeFailsafe extends Failsafe {
     private boolean isFarmingMacroActive() {
         GoatModule farming = ModuleManager.findByName("FarmingMacro");
         return farming != null && farming.isEnabled();
+    }
+
+    private boolean isPestCleanerActive() {
+        GoatModule pest = ModuleManager.findByName("PestCleaner");
+        return pest != null && pest.isEnabled();
     }
 
     @Override
