@@ -98,6 +98,7 @@ To boot up Minecraft with the mod preloaded:
 Special thanks to the following open-source projects for their inspiration and references:
 - [V5](https://github.com/V5-Client/V5)
 - [FarmHelper](https://github.com/JellyLabScripts/FarmHelper)
+- valekatoz - KoreForge
 
 ---
 
