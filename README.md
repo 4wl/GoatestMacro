@@ -90,7 +90,7 @@ To boot up Minecraft with the mod preloaded:
 | :--- | :--- |
 | **Right Shift** | Opens/closes the main Goat GUI dashboard. |
 | **`/goat`** | Chat command to verify mod initialization status. |
-| **`/goto <X> <Y> <Z>`** | Commands the A* Pathfinder to navigate to the specified coordinate. |
+| **`/goat goto <X> <Y> <Z>`** | Commands the A* Pathfinder to navigate to the specified coordinate. |
 
 ---
 
