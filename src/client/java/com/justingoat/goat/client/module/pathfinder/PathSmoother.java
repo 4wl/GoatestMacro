@@ -51,10 +51,10 @@ public class PathSmoother {
             current = farthest;
         }
 
-        return addCornerNodes(smoothed);
+        return addCornerNodes(client, smoothed, allowWater);
     }
 
-    private static List<PathNode> addCornerNodes(List<PathNode> path) {
+    private static List<PathNode> addCornerNodes(MinecraftClient client, List<PathNode> path, boolean allowWater) {
         if (path.size() <= 2) return path;
 
         List<PathNode> result = new ArrayList<>();
@@ -76,8 +76,8 @@ public class PathSmoother {
                 BlockPos pp = prev.getPos();
                 int mx = (cp.getX() + pp.getX()) / 2;
                 int mz = (cp.getZ() + pp.getZ()) / 2;
-                if (mx != cp.getX() || mz != cp.getZ()) {
-                    BlockPos mid = new BlockPos(mx, cp.getY(), mz);
+                BlockPos mid = new BlockPos(mx, cp.getY(), mz);
+                if (canInsertCornerNode(client, prev.getPos(), mid, cur.getPos(), allowWater)) {
                     result.add(new PathNode(mid, PathNode.MoveType.WALK));
                 }
             }
@@ -89,8 +89,8 @@ public class PathSmoother {
                 BlockPos np = next.getPos();
                 int mx = (cp.getX() + np.getX()) / 2;
                 int mz = (cp.getZ() + np.getZ()) / 2;
-                if (mx != cp.getX() || mz != cp.getZ()) {
-                    BlockPos mid = new BlockPos(mx, cp.getY(), mz);
+                BlockPos mid = new BlockPos(mx, cp.getY(), mz);
+                if (canInsertCornerNode(client, cur.getPos(), mid, next.getPos(), allowWater)) {
                     result.add(new PathNode(mid, PathNode.MoveType.WALK));
                 }
             }
@@ -98,6 +98,17 @@ public class PathSmoother {
 
         result.add(path.get(path.size() - 1));
         return result;
+    }
+
+    private static boolean canInsertCornerNode(MinecraftClient client, BlockPos from, BlockPos mid, BlockPos to, boolean allowWater) {
+        if (mid.equals(from) || mid.equals(to)) return false;
+        if (from.getY() != mid.getY() || to.getY() != mid.getY()) return false;
+        if (!isChunkLoaded(client, mid) || !isChunkLoaded(client, mid.up()) || !isChunkLoaded(client, mid.up(2))) return false;
+        if (!isStandableGround(client, mid)) return false;
+        if (!isPassable(client, mid.up()) || !isPassable(client, mid.up(2))) return false;
+        if (isLava(client, mid.up())) return false;
+        if (!allowWater && isWater(client, mid.up())) return false;
+        return hasLineOfWalk(client, from, mid, allowWater) && hasLineOfWalk(client, mid, to, allowWater);
     }
 
     private static double turnAngle(BlockPos prev, BlockPos cur, BlockPos next) {

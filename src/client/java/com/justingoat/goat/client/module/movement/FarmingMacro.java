@@ -4,6 +4,7 @@ import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.MacroHudInfo;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.ModuleManager;
+import com.justingoat.goat.client.module.pathfinder.AStarPathfinder;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.ModeValue;
 import com.justingoat.goat.client.module.value.NumberValue;
@@ -958,7 +959,10 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         serverRecoveryReturnBlock = null;
         if (client.player == null || client.world == null || !SkyBlockUtils.isInGarden()) return;
 
-        serverRecoveryReturnBlock = client.player.getBlockPos().down();
+        serverRecoveryReturnBlock = AStarPathfinder.findNearestStandableGround(client.player.getBlockPos(), true);
+        if (serverRecoveryReturnBlock == null) {
+            serverRecoveryReturnBlock = client.player.getBlockPos().down();
+        }
         serverRecoveryReturnYaw = client.player.getYaw();
         serverRecoveryReturnPitch = client.player.getPitch();
     }
@@ -1141,7 +1145,10 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         if (!SkyBlockUtils.isInGarden()) return;
         if (!shouldRecordFarmingResumePosition()) return;
 
-        lastFarmingResumeBlock = client.player.getBlockPos().down();
+        lastFarmingResumeBlock = AStarPathfinder.findNearestStandableGround(client.player.getBlockPos(), true);
+        if (lastFarmingResumeBlock == null) {
+            lastFarmingResumeBlock = client.player.getBlockPos().down();
+        }
         lastFarmingResumeYaw = client.player.getYaw();
         lastFarmingResumePitch = client.player.getPitch();
     }

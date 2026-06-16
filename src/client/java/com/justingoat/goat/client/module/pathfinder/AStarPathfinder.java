@@ -50,8 +50,8 @@ public class AStarPathfinder {
         if (client.world == null) return null;
 
         SearchConfig config = new SearchConfig(maxDrop, allowWater, new BlockCache());
-        start = snapToGround(client, config, start);
-        end = snapToGround(client, config, end);
+        start = resolvePathEndpoint(client, config, start);
+        end = resolvePathEndpoint(client, config, end);
         if (start == null || end == null) return null;
 
         PathCacheKey cacheKey = new PathCacheKey(start.asLong(), end.asLong(), maxNodes, maxDrop, allowWater);
@@ -148,18 +148,56 @@ public class AStarPathfinder {
             && Math.abs(pos.getY() - end.getY()) <= 1;
     }
 
+    public static BlockPos findNearestStandableGround(BlockPos pos, boolean allowWater) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.world == null || pos == null) return null;
+
+        SearchConfig config = new SearchConfig(3, allowWater, new BlockCache());
+        return resolvePathEndpoint(client, config, pos);
+    }
+
+    private static BlockPos resolvePathEndpoint(MinecraftClient client, SearchConfig config, BlockPos pos) {
+        BlockPos snapped = snapToGround(client, config, pos);
+        if (snapped != null) return snapped;
+
+        BlockPos best = null;
+        double bestDistSq = Double.POSITIVE_INFINITY;
+        for (int radius = 1; radius <= 2; radius++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dz)) != radius) continue;
+
+                    BlockPos candidate = snapToGround(client, config, pos.add(dx, 0, dz));
+                    if (candidate == null) continue;
+
+                    int ddx = candidate.getX() - pos.getX();
+                    int ddy = candidate.getY() - pos.getY();
+                    int ddz = candidate.getZ() - pos.getZ();
+                    double distSq = ddx * ddx + ddy * ddy + ddz * ddz;
+                    if (distSq < bestDistSq) {
+                        bestDistSq = distSq;
+                        best = candidate;
+                    }
+                }
+            }
+            if (best != null) return best;
+        }
+
+        return null;
+    }
+
     private static BlockPos snapToGround(MinecraftClient client, SearchConfig config, BlockPos pos) {
         if (!isChunkLoaded(client, pos)) return null;
         if (isStandableGround(client, config, pos) && isSafePassable(client, config, pos.up(1))) return pos;
 
         BlockPos probe = pos;
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 8; i++) {
             probe = probe.down();
             if (!isChunkLoaded(client, probe)) return null;
             if (isStandableGround(client, config, probe) && isSafePassable(client, config, probe.up(1))) return probe;
         }
         probe = pos;
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 4; i++) {
             probe = probe.up();
             if (!isChunkLoaded(client, probe)) return null;
             if (isStandableGround(client, config, probe) && isSafePassable(client, config, probe.up(1))) return probe;

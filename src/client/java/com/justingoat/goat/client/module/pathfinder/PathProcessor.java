@@ -47,6 +47,7 @@ public class PathProcessor {
     private int jumpLockIndex = -1;
     private boolean jumpLockWasAirborne = false;
     private double targetBestScore = Double.POSITIVE_INFINITY;
+    private boolean allowWater = false;
 
     // V5-inspired multi-stage recovery
     private static final int STUCK_JUMP_TICKS = 10;
@@ -55,6 +56,15 @@ public class PathProcessor {
     private static final int NODE_NO_PROGRESS_REPATH_TICKS = 55;
     private static final int NODE_HARD_REPATH_TICKS = 160;
     private static final int REPATH_PAUSE_TICKS = 6;
+    private static final int MISSED_JUMP_REPATH_PAUSE_TICKS = 1;
+    private static final int WALK_LOOKAHEAD_NODES = 4;
+    private static final double WALK_SOFT_REACH = 0.68;
+    private static final double WALK_CORRIDOR_WIDTH = 1.05;
+    private static final double WALK_CORRIDOR_ADVANCE = 0.22;
+    private static final double DROP_SOFT_REACH = 0.95;
+    private static final double DROP_OVERSHOOT_WIDTH = 1.15;
+    private static final double DROP_OVERSHOOT_ADVANCE = 0.72;
+    private static final double DROP_OVERSHOOT_LIMIT = 1.75;
     private int backupTicks = 0;
 
     // Async repath state
@@ -63,7 +73,12 @@ public class PathProcessor {
     // ---------------------------------------------------------------- API
 
     public void setPath(List<PathNode> path) {
+        setPath(path, false);
+    }
+
+    public void setPath(List<PathNode> path, boolean allowWater) {
         this.path = path;
+        this.allowWater = allowWater;
         this.currentIndex = 0;
         this.lastX = Double.NaN;
         this.lastZ = Double.NaN;
@@ -167,6 +182,16 @@ public class PathProcessor {
             currentIndex++;
             resetTargetProgress();
             if (isDone()) { finish(client); return; }
+        }
+        while (!isDone() && advanceAlongWalkCorridor(px, py, pz)) {
+            if (isDone()) { finish(client); return; }
+        }
+        if (!isDone() && advancePastDropNode(client, px, py, pz)) {
+            return;
+        }
+        if (!isDone() && currentIndex >= path.size() - 1 && hasReachedNode(client, path.get(currentIndex), px, py, pz)) {
+            finish(client);
+            return;
         }
 
         PathNode curNode = path.get(currentIndex);
@@ -386,6 +411,13 @@ public class PathProcessor {
     private boolean hasReachedNode(MinecraftClient client, PathNode node, double px, double py, double pz) {
         BlockPos ground = client.player.getBlockPos().down();
         boolean onTargetGround = ground.equals(node.getPos());
+        if (node.getMoveType() == PathNode.MoveType.DROP) {
+            if (onTargetGround && isNearDropLandingHeight(client, node, py)) return true;
+
+            Vec3d center = nodeCenter(node);
+            double hDistSq = hDistSq(px, pz, center.x, center.z);
+            return hDistSq <= DROP_SOFT_REACH * DROP_SOFT_REACH && isNearDropLandingHeight(client, node, py);
+        }
         if (requiresStrictLanding(node.getMoveType())) {
             if (jumpLockIndex == currentIndex && (!client.player.isOnGround() || !jumpLockWasAirborne)) {
                 return false;
@@ -399,6 +431,14 @@ public class PathProcessor {
         double hDistSq = hDistSq(px, pz, center.x, center.z);
         double vDist = Math.abs(py - center.y);
         return hDistSq <= reach * reach && vDist <= nodeVerticalReach(node.getMoveType());
+    }
+
+    private boolean isNearDropLandingHeight(MinecraftClient client, PathNode node, double py) {
+        double targetY = node.getPos().getY() + 1.0;
+        if (client.player.isOnGround()) {
+            return Math.abs(py - targetY) <= 1.35;
+        }
+        return py <= targetY + 0.45 && py >= targetY - 1.2;
     }
 
     private boolean canSkipReachedNode(PathNode node) {
@@ -429,11 +469,92 @@ public class PathProcessor {
         return along > 0.12 && cross < 0.9;
     }
 
+    private boolean advanceAlongWalkCorridor(double px, double py, double pz) {
+        if (currentIndex + 1 >= path.size()) return false;
+        PathNode current = path.get(currentIndex);
+        if (current.getMoveType() != PathNode.MoveType.WALK) return false;
+
+        int max = Math.min(path.size() - 1, currentIndex + WALK_LOOKAHEAD_NODES);
+        for (int candidateIndex = max; candidateIndex > currentIndex; candidateIndex--) {
+            if (!isContinuousWalkSegment(currentIndex, candidateIndex)) continue;
+
+            PathNode candidate = path.get(candidateIndex);
+            Vec3d candidateCenter = nodeCenter(candidate);
+            if (Math.abs(py - candidateCenter.y) > 0.9) continue;
+
+            if (hDistSq(px, pz, candidateCenter.x, candidateCenter.z) <= WALK_SOFT_REACH * WALK_SOFT_REACH) {
+                currentIndex = candidateIndex;
+                resetTargetProgress();
+                return true;
+            }
+
+            Vec3d currentCenter = nodeCenter(current);
+            SegmentProgress progress = projectToHorizontalSegment(px, pz, currentCenter, candidateCenter);
+            if (progress.along >= WALK_CORRIDOR_ADVANCE
+                && progress.along <= 1.25
+                && progress.cross <= WALK_CORRIDOR_WIDTH) {
+                currentIndex = candidateIndex;
+                resetTargetProgress();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private boolean advancePastDropNode(MinecraftClient client, double px, double py, double pz) {
+        if (currentIndex <= 0 || currentIndex >= path.size()) return false;
+
+        PathNode drop = path.get(currentIndex);
+        if (drop.getMoveType() != PathNode.MoveType.DROP) return false;
+        if (!isNearDropLandingHeight(client, drop, py)) return false;
+
+        PathNode previous = path.get(currentIndex - 1);
+        SegmentProgress progress = projectToHorizontalSegment(px, pz, nodeCenter(previous), nodeCenter(drop));
+        if (progress.along < DROP_OVERSHOOT_ADVANCE
+            || progress.along > DROP_OVERSHOOT_LIMIT
+            || progress.cross > DROP_OVERSHOOT_WIDTH) {
+            return false;
+        }
+
+        currentIndex++;
+        resetTargetProgress();
+        if (isDone()) {
+            finish(client);
+        }
+        return true;
+    }
+
+    private boolean isContinuousWalkSegment(int fromIndex, int toIndex) {
+        if (fromIndex < 0 || toIndex >= path.size() || fromIndex >= toIndex) return false;
+        int y = path.get(fromIndex).getPos().getY();
+        for (int i = fromIndex; i <= toIndex; i++) {
+            PathNode node = path.get(i);
+            if (node.getMoveType() != PathNode.MoveType.WALK) return false;
+            if (node.getPos().getY() != y) return false;
+        }
+        return true;
+    }
+
+    private SegmentProgress projectToHorizontalSegment(double px, double pz, Vec3d from, Vec3d to) {
+        double segX = to.x - from.x;
+        double segZ = to.z - from.z;
+        double segLenSq = segX * segX + segZ * segZ;
+        if (segLenSq < 0.0001) return new SegmentProgress(0.0, Double.POSITIVE_INFINITY);
+
+        double playerX = px - from.x;
+        double playerZ = pz - from.z;
+        double along = (playerX * segX + playerZ * segZ) / segLenSq;
+        double cross = Math.abs(playerX * segZ - playerZ * segX) / Math.sqrt(segLenSq);
+        return new SegmentProgress(along, cross);
+    }
+
+    private record SegmentProgress(double along, double cross) {}
+
     private boolean requiresStrictLanding(PathNode.MoveType type) {
         return type == PathNode.MoveType.STEP_UP
             || type == PathNode.MoveType.JUMP_ACROSS
-            || type == PathNode.MoveType.SPRINT_JUMP
-            || type == PathNode.MoveType.DROP;
+            || type == PathNode.MoveType.SPRINT_JUMP;
     }
 
     private boolean isJumpTransition(PathNode.MoveType type) {
@@ -455,9 +576,9 @@ public class PathProcessor {
     private double nodeReach(PathNode.MoveType type) {
         return switch (type) {
             case CLIMB, SWIM -> 0.62;
-            case DROP -> 0.55;
+            case DROP -> DROP_SOFT_REACH;
             case STEP_UP, JUMP_ACROSS, SPRINT_JUMP -> 0.48;
-            case WALK -> 0.42;
+            case WALK -> WALK_SOFT_REACH;
         };
     }
 
@@ -502,7 +623,7 @@ public class PathProcessor {
                 && targetTicks >= NODE_NO_PROGRESS_REPATH_TICKS
                 && targetNoProgressTicks >= NODE_NO_PROGRESS_REPATH_TICKS / 2;
             if (landedOnWrongBlock || fellBelowTarget || failedToClimb) {
-                scheduleNodeRepath(client, "禮e[Goat] Missed jump node. Pausing before repath...");
+                scheduleNodeRepath(client, "[Goat] Missed jump node. Repathing...", MISSED_JUMP_REPATH_PAUSE_TICKS);
                 return true;
             }
         }
@@ -511,17 +632,21 @@ public class PathProcessor {
         boolean hardTimeout = targetTicks >= NODE_HARD_REPATH_TICKS && targetNoProgressTicks >= noProgressLimit;
         if (!closeButNotReached && !hardTimeout) return false;
 
-        scheduleNodeRepath(client, "禮e[Goat] Cannot step on node. Pausing before repath...");
+        scheduleNodeRepath(client, "[Goat] Cannot step on node. Pausing before repath...");
         return true;
     }
 
     private void scheduleNodeRepath(MinecraftClient client, String message) {
+        scheduleNodeRepath(client, message, REPATH_PAUSE_TICKS);
+    }
+
+    private void scheduleNodeRepath(MinecraftClient client, String message, int pauseTicks) {
         if (nodeRepathQueued || repathPauseTicks > 0 || repathing) return;
         nodeRepathQueued = true;
         freezeRotation(client);
         client.player.sendMessage(Text.literal(message), false);
         InputUtils.releaseAll();
-        repathPauseTicks = REPATH_PAUSE_TICKS;
+        repathPauseTicks = Math.max(1, pauseTicks);
         targetTicks = 0;
         targetNoProgressTicks = 0;
         jumpLockIndex = -1;
@@ -704,8 +829,8 @@ public class PathProcessor {
         BlockPos start = client.player.getBlockPos().down();
 
         CompletableFuture.supplyAsync(() -> {
-            List<PathNode> raw = AStarPathfinder.computePath(start, goal, maxNodes, maxDrop);
-            return raw != null ? PathSmoother.smooth(raw) : null;
+            List<PathNode> raw = AStarPathfinder.computePath(start, goal, maxNodes, maxDrop, allowWater);
+            return raw != null ? PathSmoother.smooth(raw, allowWater) : null;
         }).thenAccept(newPath -> client.execute(() -> {
             repathing = false;
             if (newPath != null) {

@@ -141,7 +141,7 @@ public class PathfinderTest extends GoatModule {
             if (path != null) {
                 client.player.sendMessage(
                     Text.literal("§a[Goat] Walk path found — " + path.size() + " nodes."), false);
-                pathProcessor.setPath(path);
+                pathProcessor.setPath(path, allowWater);
             } else {
                 client.player.sendMessage(
                     Text.literal("§c[Goat] No walk path found."), false);

@@ -11,6 +11,7 @@ import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.failsafe.impl.*;
 import com.justingoat.goat.client.module.movement.PathfinderTest;
+import com.justingoat.goat.client.module.pathfinder.AStarPathfinder;
 import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
 import net.fabricmc.loader.api.FabricLoader;
@@ -130,7 +131,10 @@ public class FailsafeManager {
 
         if (client.player == null || client.world == null) return;
 
-        savedReturnBlock = client.player.getBlockPos().down();
+        savedReturnBlock = AStarPathfinder.findNearestStandableGround(client.player.getBlockPos(), true);
+        if (savedReturnBlock == null) {
+            savedReturnBlock = client.player.getBlockPos().down();
+        }
         savedReturnYaw = client.player.getYaw();
         savedReturnPitch = client.player.getPitch();
     }
