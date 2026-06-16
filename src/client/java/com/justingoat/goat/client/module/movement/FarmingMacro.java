@@ -7,6 +7,9 @@ import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.ModeValue;
 import com.justingoat.goat.client.module.value.NumberValue;
+import com.justingoat.goat.client.events.EventListener;
+import com.justingoat.goat.client.events.EventManager;
+import com.justingoat.goat.client.events.impl.packet.ChatMessageEvent;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.module.failsafe.impl.TeleportFailsafe;
 import com.justingoat.goat.client.module.farming.PestCleaner;
@@ -15,6 +18,7 @@ import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
 import com.justingoat.goat.client.utils.LagDetector;
 import com.justingoat.goat.client.utils.RotationUtils;
+import com.justingoat.goat.client.utils.SkyBlockUtils;
 
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
@@ -26,6 +30,8 @@ import net.minecraft.registry.Registries;
 import net.minecraft.state.property.IntProperty;
 import net.minecraft.state.property.Property;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
@@ -57,6 +63,16 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     private static final int S_DIRECTION_SCAN_DISTANCE = 180;
     private static final int S_CROP_DIRECTION_SCAN_FORWARD = 5;
     private static final int S_MATURE_WHEAT_AGE = 7;
+    private static final long SERVER_RECOVERY_GRACE_MS = 90_000L;
+    private static final long SERVER_RECOVERY_LOCATION_GRACE_MS = 5_000L;
+    private static final long SERVER_RECOVERY_SKYBLOCK_RETRY_MS = 10_000L;
+    private static final long SERVER_RECOVERY_GARDEN_RETRY_MS = 5_000L;
+    private static final long SERVER_RECOVERY_RETURN_TIMEOUT_MS = 35_000L;
+    private static final double SERVER_RECOVERY_RETURN_REACH_DISTANCE_SQ = 0.64;
+    private static final int IMMATURE_CROP_TICK_LIMIT = 50;
+    private static final int IMMATURE_CROP_BLOCK_LIMIT = 8;
+    private static final int NO_CROP_TICK_LIMIT = 240;
+    private static final int NO_CROP_SCAN_RADIUS = 2;
 
     // ── States ──
     private enum State {
@@ -67,7 +83,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         // S-Shape states: strafe A/D along row, W/S to switch lane
         S_NONE, S_LEFT, S_RIGHT, S_SWITCHING_LANE, S_DROPPING,
         // Shared
-        PEST_CLEANING, REWARP
+        PEST_CLEANING, REWARP, SERVER_RECOVERY
     }
 
     // ── Settings ──
@@ -76,6 +92,8 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     private final BooleanValue snapTo45;
     private final BooleanValue lagPause;
     private final BooleanValue bpsMonitor;
+    private final BooleanValue serverRecovery;
+    private final BooleanValue cropGuard;
     private final NumberValue delayMin;
     private final NumberValue delayMax;
     private final BooleanValue debug;
@@ -95,6 +113,23 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     private int antiStuckAttempts = 0;
     private Vec3d antiStuckLastPos = null;
     private Float antiStuckEscapeYaw = null;
+    private boolean recoveringFromServerMove = false;
+    private long expectedServerMoveUntil = 0L;
+    private long nextServerRecoveryCommandAt = 0L;
+    private String serverRecoveryReason = "";
+    private BlockPos lastFarmingResumeBlock = null;
+    private float lastFarmingResumeYaw = 0.0f;
+    private float lastFarmingResumePitch = 0.0f;
+    private BlockPos serverRecoveryReturnBlock = null;
+    private float serverRecoveryReturnYaw = 0.0f;
+    private float serverRecoveryReturnPitch = 0.0f;
+    private boolean serverRecoveryReturnPathStarted = false;
+    private long serverRecoveryReturnStartTime = 0L;
+    private boolean returnToSavedPositionAfterRewarp = false;
+    private int immatureCropTicks = 0;
+    private int immatureCropBlocks = 0;
+    private int noCropTicks = 0;
+    private BlockPos lastCropGuardBlock = null;
 
     // ── Vertical state ──
     private String farmAxis = null;
@@ -115,6 +150,8 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         snapTo45 = addBoolean("Snap 45°", false);
         lagPause = addBoolean("LagPause", true);
         bpsMonitor = addBoolean("BPSTracker", true);
+        serverRecovery = addBoolean("ServerRecovery", true);
+        cropGuard = addBoolean("CropGuard", true);
         delayMin = addNumber("Delay Min (ms)", 50.0, 0.0, 500.0);
         delayMax = addNumber("Delay Max (ms)", 150.0, 0.0, 500.0);
         debug = addBoolean("Debug", false);
@@ -134,14 +171,20 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
                 super.setEnabled(false);
                 return;
             }
+            if (!EventManager.INSTANCE.isRegistered(this)) {
+                EventManager.INSTANCE.register(this);
+            }
             resetAllState(client);
             equipBestHoe(client);
             ChatUtils.sendSuccessMessage("FarmingMacro enabled (" + farmType.getValue() + ")");
         } else if (!enabled && wasEnabled) {
             state = State.WAITING;
             rotation.clear();
+            stopServerRecovery();
+            resetCropGuard();
             resetAntiStuck();
             InputUtils.releaseAll();
+            EventManager.INSTANCE.unregister(this);
             ChatUtils.sendWarningMessage("FarmingMacro disabled");
         }
     }
@@ -150,6 +193,10 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         warping = false;
         warpDelay = null;
         rewarpTriggered = false;
+        stopServerRecovery();
+        clearSavedReturnPosition();
+        lastFarmingResumeBlock = null;
+        resetCropGuard();
         resetAntiStuck();
         rotation.init(client.player.getYaw(), client.player.getPitch());
 
@@ -211,6 +258,11 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     public void tick(MinecraftClient client) {
         if (!isEnabled() || client.player == null || client.world == null) return;
 
+        if (recoveringFromServerMove) {
+            tickServerRecovery(client);
+            return;
+        }
+
         if (FailsafeManager.getInstance().hasEmergency()) {
             setEnabled(false);
             return;
@@ -218,6 +270,14 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
 
         if (client.currentScreen != null) {
             InputUtils.releaseAll();
+            return;
+        }
+
+        recordFarmingResumePosition(client);
+
+        if (shouldStartServerRecoveryFromLocation()) {
+            startServerRecovery("Left Garden");
+            tickServerRecovery(client);
             return;
         }
 
@@ -261,6 +321,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             // Shared
             case PEST_CLEANING -> tickPestCleaning(client);
             case REWARP -> tickRewarp(client);
+            case SERVER_RECOVERY -> tickServerRecovery(client);
         }
     }
 
@@ -393,6 +454,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         }
 
         InputUtils.setAttack(true);
+        if (tickCropGuard(client)) return;
 
         if ("a".equals(movementKey)) {
             InputUtils.setLeft(true);
@@ -492,6 +554,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         InputUtils.releaseAll();
         InputUtils.setLeft(true);
         InputUtils.setAttack(true);
+        if (tickCropGuard(client)) return;
 
         if (tickAntiStuck(client, "s-shape left", lockedYaw + 90.0f)) {
             return;
@@ -525,6 +588,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         InputUtils.releaseAll();
         InputUtils.setRight(true);
         InputUtils.setAttack(true);
+        if (tickCropGuard(client)) return;
 
         if (tickAntiStuck(client, "s-shape right", lockedYaw - 90.0f)) {
             return;
@@ -763,6 +827,215 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     // ── SHARED: REWARP ──
     // ══════════════════════════════════════════════════════════════
 
+    @EventListener
+    private void onChatMessage(ChatMessageEvent event) {
+        if (!serverRecovery.getValue() || !isEnabled() || event.isOverlay()) return;
+        if (event.getMessage().contains(":")) return;
+
+        String message = event.getMessage().toLowerCase(Locale.ROOT);
+        if (!isServerMoveMessage(message)) return;
+
+        expectedServerMoveUntil = System.currentTimeMillis() + SERVER_RECOVERY_GRACE_MS;
+        startServerRecovery("Server reboot/update");
+    }
+
+    private boolean isServerMoveMessage(String message) {
+        return message.contains("scheduled reboot")
+            || message.contains("scheduled server reboot")
+            || (message.contains("server") && message.contains("reboot"))
+            || (message.contains("server") && message.contains("restart"))
+            || message.contains("game update")
+            || message.contains("game updating")
+            || message.contains("being updated")
+            || message.contains("instance shutdown")
+            || message.contains("server is closing");
+    }
+
+    private boolean shouldStartServerRecoveryFromLocation() {
+        if (!serverRecovery.getValue() || startPoint == null) return false;
+        if (getEnabledDurationMillis() < SERVER_RECOVERY_LOCATION_GRACE_MS) return false;
+        if (state == State.WAITING || state == State.REWARP || state == State.PEST_CLEANING || state == State.SERVER_RECOVERY) {
+            return false;
+        }
+        if (SkyBlockUtils.isInGarden()) return false;
+
+        String island = SkyBlockUtils.getCurrentIsland();
+        if (SkyBlockUtils.isOnSkyBlock() && "Unknown".equalsIgnoreCase(island)) return false;
+
+        return true;
+    }
+
+    private void startServerRecovery(String reason) {
+        if (!serverRecovery.getValue()) return;
+        if (startPoint == null) {
+            ChatUtils.sendErrorMessage("Server recovery needs a start point. Use /goatsetstart");
+            setEnabled(false);
+            return;
+        }
+
+        if (!recoveringFromServerMove) {
+            captureServerRecoveryReturnPosition(MinecraftClient.getInstance());
+            ChatUtils.sendWarningMessage("Server recovery started: " + reason);
+        }
+        recoveringFromServerMove = true;
+        serverRecoveryReason = reason;
+        nextServerRecoveryCommandAt = 0L;
+        state = State.SERVER_RECOVERY;
+        InputUtils.releaseAll();
+        rotation.clear();
+        resetAntiStuck();
+        GoatModule pestModule = ModuleManager.findByName("PestCleaner");
+        if (pestModule != null && pestModule.isEnabled()) {
+            pestModule.setEnabled(false);
+        }
+    }
+
+    private void tickServerRecovery(MinecraftClient client) {
+        InputUtils.releaseAll();
+        resetAntiStuck();
+
+        if (client.currentScreen != null) return;
+        if (startPoint == null) {
+            ChatUtils.sendErrorMessage("Server recovery needs a start point. Use /goatsetstart");
+            setEnabled(false);
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        if (!SkyBlockUtils.isOnSkyBlock()) {
+            sendServerRecoveryCommand(client, "skyblock", SERVER_RECOVERY_SKYBLOCK_RETRY_MS, now);
+            return;
+        }
+
+        if (!SkyBlockUtils.isInGarden()) {
+            sendServerRecoveryCommand(client, "warp garden", SERVER_RECOVERY_GARDEN_RETRY_MS, now);
+            return;
+        }
+
+        if (serverRecoveryReturnBlock == null
+            && (!isHorizontallyAtPoint(client, startPoint, 1.0) || !areChunksLoaded(client, startPoint))) {
+            sendServerRecoveryCommand(client, "warp garden", SERVER_RECOVERY_GARDEN_RETRY_MS, now);
+            return;
+        }
+
+        if (!client.player.isOnGround()) {
+            InputUtils.setSneak(true);
+            return;
+        }
+
+        if (shouldReturnToServerRecoveryPosition(client)) {
+            tickReturnToServerRecoveryPosition(client);
+            return;
+        }
+
+        restoreServerRecoveryRotation(client);
+        ChatUtils.sendSuccessMessage("Server recovery complete, resuming FarmingMacro");
+        stopServerRecovery();
+        resumeAfterRewarpWhenGrounded(client);
+    }
+
+    private void sendServerRecoveryCommand(MinecraftClient client, String command, long retryMs, long now) {
+        if (client.player == null || client.player.networkHandler == null) return;
+        if (now < nextServerRecoveryCommandAt) return;
+
+        markWarpCommand();
+        client.player.networkHandler.sendChatCommand(command);
+        nextServerRecoveryCommandAt = now + retryMs;
+        debugMsg("Server recovery command: /" + command + " (" + serverRecoveryReason + ")");
+    }
+
+    private void captureServerRecoveryReturnPosition(MinecraftClient client) {
+        serverRecoveryReturnPathStarted = false;
+        serverRecoveryReturnStartTime = 0L;
+
+        if (lastFarmingResumeBlock != null) {
+            serverRecoveryReturnBlock = lastFarmingResumeBlock.toImmutable();
+            serverRecoveryReturnYaw = lastFarmingResumeYaw;
+            serverRecoveryReturnPitch = lastFarmingResumePitch;
+            return;
+        }
+
+        serverRecoveryReturnBlock = null;
+        if (client.player == null || client.world == null || !SkyBlockUtils.isInGarden()) return;
+
+        serverRecoveryReturnBlock = client.player.getBlockPos().down();
+        serverRecoveryReturnYaw = client.player.getYaw();
+        serverRecoveryReturnPitch = client.player.getPitch();
+    }
+
+    private boolean shouldReturnToServerRecoveryPosition(MinecraftClient client) {
+        return serverRecoveryReturnBlock != null && !isAtBlockPosition(client, serverRecoveryReturnBlock);
+    }
+
+    private void tickReturnToServerRecoveryPosition(MinecraftClient client) {
+        GoatModule module = ModuleManager.findByName("Pathfinder");
+        if (!(module instanceof PathfinderTest pathfinder)) {
+            ChatUtils.sendErrorMessage("Server recovery cannot return: Pathfinder module not found.");
+            setEnabled(false);
+            return;
+        }
+
+        if (!serverRecoveryReturnPathStarted) {
+            serverRecoveryReturnPathStarted = true;
+            serverRecoveryReturnStartTime = System.currentTimeMillis();
+            ChatUtils.sendInfoMessage("Returning to saved farming position...");
+            pathfinder.pathTargetWalkAllowWater(serverRecoveryReturnBlock);
+            return;
+        }
+
+        if (isAtBlockPosition(client, serverRecoveryReturnBlock)) {
+            pathfinder.setEnabled(false);
+            restoreServerRecoveryRotation(client);
+            return;
+        }
+
+        if (System.currentTimeMillis() - serverRecoveryReturnStartTime > SERVER_RECOVERY_RETURN_TIMEOUT_MS) {
+            pathfinder.setEnabled(false);
+            ChatUtils.sendErrorMessage("Server recovery return timed out. FarmingMacro stopped.");
+            setEnabled(false);
+            return;
+        }
+
+        if (!pathfinder.isEnabled()) {
+            ChatUtils.sendErrorMessage("Server recovery could not return to saved position. FarmingMacro stopped.");
+            setEnabled(false);
+        }
+    }
+
+    private boolean isAtBlockPosition(MinecraftClient client, BlockPos block) {
+        if (client.player == null || block == null) return false;
+
+        double dx = client.player.getX() - (block.getX() + 0.5);
+        double dz = client.player.getZ() - (block.getZ() + 0.5);
+        double dy = Math.abs(client.player.getY() - (block.getY() + 1.0));
+        return dx * dx + dz * dz <= SERVER_RECOVERY_RETURN_REACH_DISTANCE_SQ && dy <= 1.25;
+    }
+
+    private void restoreServerRecoveryRotation(MinecraftClient client) {
+        if (client.player == null || serverRecoveryReturnBlock == null) return;
+        client.player.setYaw(serverRecoveryReturnYaw);
+        client.player.setPitch(serverRecoveryReturnPitch);
+    }
+
+    private void stopServerRecovery() {
+        recoveringFromServerMove = false;
+        expectedServerMoveUntil = 0L;
+        nextServerRecoveryCommandAt = 0L;
+        serverRecoveryReason = "";
+        clearSavedReturnPosition();
+    }
+
+    private void clearSavedReturnPosition() {
+        serverRecoveryReturnBlock = null;
+        serverRecoveryReturnPathStarted = false;
+        serverRecoveryReturnStartTime = 0L;
+        returnToSavedPositionAfterRewarp = false;
+    }
+
+    public boolean isRecoveringFromServerMove() {
+        return recoveringFromServerMove || System.currentTimeMillis() < expectedServerMoveUntil;
+    }
+
     private void tickRewarp(MinecraftClient client) {
         if (startPoint == null) {
             ChatUtils.sendErrorMessage("No start point set! Use /goatsetstart");
@@ -774,6 +1047,25 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             long delay = 500 + (long) (Math.random() * 250);
             warpDelay = System.currentTimeMillis() + delay;
             debugMsg("Warping in " + delay + "ms");
+            return;
+        }
+
+        if (returnToSavedPositionAfterRewarp && serverRecoveryReturnBlock != null && SkyBlockUtils.isInGarden()) {
+            if (!client.player.isOnGround()) {
+                InputUtils.releaseAll();
+                InputUtils.setSneak(true);
+                InputUtils.setJump(false);
+                return;
+            }
+
+            if (shouldReturnToServerRecoveryPosition(client)) {
+                tickReturnToServerRecoveryPosition(client);
+                return;
+            }
+
+            restoreServerRecoveryRotation(client);
+            clearSavedReturnPosition();
+            resumeAfterRewarpWhenGrounded(client);
             return;
         }
 
@@ -803,6 +1095,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
 
         InputUtils.setSneak(false);
         warpDelay = null;
+        resetCropGuard();
         if (isVertical()) {
             movementKey = null;
             inAir = false;
@@ -842,6 +1135,124 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     // ══════════════════════════════════════════════════════════════
     // ── Block Scanning (Vertical) ──
     // ══════════════════════════════════════════════════════════════
+
+    private void recordFarmingResumePosition(MinecraftClient client) {
+        if (client.player == null || client.world == null) return;
+        if (!SkyBlockUtils.isInGarden()) return;
+        if (!shouldRecordFarmingResumePosition()) return;
+
+        lastFarmingResumeBlock = client.player.getBlockPos().down();
+        lastFarmingResumeYaw = client.player.getYaw();
+        lastFarmingResumePitch = client.player.getPitch();
+    }
+
+    private boolean shouldRecordFarmingResumePosition() {
+        return switch (state) {
+            case V_DECIDE_MOVEMENT, V_IDLE_CHECKS, S_LEFT, S_RIGHT, S_SWITCHING_LANE, S_DROPPING -> true;
+            default -> false;
+        };
+    }
+
+    private boolean tickCropGuard(MinecraftClient client) {
+        if (!cropGuard.getValue()) return false;
+
+        CropGuardResult result = getCropGuardTarget(client);
+        if (result == CropGuardResult.MATURE) {
+            resetCropGuard();
+            return false;
+        }
+
+        if (result == CropGuardResult.IMMATURE) {
+            immatureCropTicks++;
+            noCropTicks = 0;
+            if (immatureCropTicks >= IMMATURE_CROP_TICK_LIMIT || immatureCropBlocks >= IMMATURE_CROP_BLOCK_LIMIT) {
+                stopForCropGuard("Too many immature crops detected. FarmingMacro stopped to avoid starting from an already-farmed row.");
+                return true;
+            }
+            return false;
+        }
+
+        if (hasNearbyCropForGuard(client)) {
+            noCropTicks = 0;
+            immatureCropTicks = 0;
+            immatureCropBlocks = 0;
+            lastCropGuardBlock = null;
+            return false;
+        }
+
+        noCropTicks++;
+        immatureCropTicks = 0;
+        immatureCropBlocks = 0;
+        lastCropGuardBlock = null;
+        if (noCropTicks >= NO_CROP_TICK_LIMIT) {
+            stopForCropGuard("No crops detected while farming. FarmingMacro stopped to avoid continuing from an already-farmed row.");
+            return true;
+        }
+        return false;
+    }
+
+    private boolean hasNearbyCropForGuard(MinecraftClient client) {
+        if (client.player == null || client.world == null) return false;
+
+        BlockPos base = client.player.getBlockPos();
+        for (int x = -NO_CROP_SCAN_RADIUS; x <= NO_CROP_SCAN_RADIUS; x++) {
+            for (int y = 0; y <= 2; y++) {
+                for (int z = -NO_CROP_SCAN_RADIUS; z <= NO_CROP_SCAN_RADIUS; z++) {
+                    if (isCrop(getRegistryId(client, base.add(x, y, z)))) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private CropGuardResult getCropGuardTarget(MinecraftClient client) {
+        HitResult hit = client.crosshairTarget;
+        if (!(hit instanceof BlockHitResult blockHit) || hit.getType() != HitResult.Type.BLOCK) {
+            return CropGuardResult.NO_CROP;
+        }
+
+        BlockPos pos = blockHit.getBlockPos();
+        String id = getRegistryId(client, pos);
+        if (!isCrop(id)) return CropGuardResult.NO_CROP;
+
+        int age = getCropAge(client, pos);
+        if (isMatureCrop(id, age)) return CropGuardResult.MATURE;
+
+        if (!pos.equals(lastCropGuardBlock)) {
+            immatureCropBlocks++;
+            lastCropGuardBlock = pos.toImmutable();
+        }
+        return CropGuardResult.IMMATURE;
+    }
+
+    private boolean isMatureCrop(String registryId, int age) {
+        if ("minecraft:nether_wart".equals(registryId)) return age >= 3;
+        if ("minecraft:wheat".equals(registryId)
+            || "minecraft:carrots".equals(registryId)
+            || "minecraft:potatoes".equals(registryId)) {
+            return age >= 7;
+        }
+        return false;
+    }
+
+    private void stopForCropGuard(String message) {
+        ChatUtils.sendErrorMessage(message);
+        InputUtils.releaseAll();
+        setEnabled(false);
+    }
+
+    private void resetCropGuard() {
+        immatureCropTicks = 0;
+        immatureCropBlocks = 0;
+        noCropTicks = 0;
+        lastCropGuardBlock = null;
+    }
+
+    private enum CropGuardResult {
+        MATURE,
+        IMMATURE,
+        NO_CROP
+    }
 
     private List<BlockPos> findTargetBlocks(MinecraftClient client) {
         List<BlockPos> results = new ArrayList<>();
@@ -1242,6 +1653,8 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
 
             GoatModule pestModule = ModuleManager.findByName("PestCleaner");
             if (pestModule instanceof PestCleaner) {
+                captureServerRecoveryReturnPosition(client);
+                returnToSavedPositionAfterRewarp = serverRecoveryReturnBlock != null;
                 debugMsg("Rewarp trigger reached, running PestCleaner first...");
                 ChatUtils.sendInfoMessage("Rewarp trigger reached, cleaning pests first...");
                 pestModule.setEnabled(true);

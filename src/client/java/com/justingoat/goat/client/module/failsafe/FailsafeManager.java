@@ -36,13 +36,25 @@ public class FailsafeManager {
     private long returnStartTime = 0L;
 
     private FailsafeManager() {
+        register(new BadEffectsFailsafe());
+        register(new BedrockCageFailsafe());
+        register(new DisconnectFailsafe());
+        register(new EvacuateFailsafe());
+        register(new GuestVisitFailsafe());
         register(new RotationFailsafe());
         register(new WorldChangeFailsafe());
+        register(new CobwebFailsafe());
+        register(new DirtFailsafe());
+        register(new FullInventoryFailsafe());
+        register(new ItemChangeFailsafe());
         register(new ChatMentionFailsafe());
         register(new PlayerGriefFailsafe());
         register(new TeleportFailsafe());
-        register(new VelocityFailsafe());
+        register(new KnockbackFailsafe());
         register(new SlotChangeFailsafe());
+        register(new BanwaveFailsafe());
+        register(new JacobFailsafe());
+        register(new LowerAvgBpsFailsafe());
     }
 
     private void register(Failsafe failsafe) {
@@ -102,6 +114,10 @@ public class FailsafeManager {
         InputUtils.releaseAll();
         captureReturnPosition();
         disableAllMacros();
+        if (!activeFailsafe.shouldRunReaction()) {
+            abortReturnAndKeepMacrosPaused(activeFailsafe.getName() + " triggered. Macro will stay paused.");
+            return;
+        }
         reactionController.start(activeFailsafe);
     }
 
@@ -217,6 +233,11 @@ public class FailsafeManager {
     }
 
     private void completeEmergencyAndResume() {
+        if (activeFailsafe != null && !activeFailsafe.shouldResumeMacros()) {
+            abortReturnAndKeepMacrosPaused(activeFailsafe.getName() + " completed. Macro will stay paused.");
+            return;
+        }
+
         List<String> toResume = new ArrayList<>(disabledMacroNames);
         reset();
         for (String name : toResume) {

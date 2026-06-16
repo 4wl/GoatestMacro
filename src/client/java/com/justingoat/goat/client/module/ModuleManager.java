@@ -98,15 +98,15 @@ public final class ModuleManager {
 
     private static void registerRenderModules() {
         register(module("ClickGui", ModuleCategory.RENDER, true)
-            .bool("PauseGame", false)
-            .mode("Theme", "Light", "Light", "Dark")
+//            .bool("PauseGame", false)
+//            .mode("Theme", "Light", "Light", "Dark")
             .build());
         register(module("Notification", ModuleCategory.RENDER, true)
-            .mode("Mode", "Goat", "Goat", "Simple")
+            .mode("Mode", "Goat", "Goat")
             .build());
-        register(module("Crosshair", ModuleCategory.RENDER, true)
-            .number("Size", 4.0, 1.0, 12.0)
-            .build());
+//        register(module("Crosshair", ModuleCategory.RENDER, true)
+//            .number("Size", 4.0, 1.0, 12.0)
+//            .build());
         register(new CustomFOV());
         register(new FullBright());
         register(new PestESP());
@@ -118,7 +118,7 @@ public final class ModuleManager {
             .bool("BetterButton", true)
             .bool("ScreenAnimation", true)
             .bool("UngrabOnMacro", true)
-            .mode("Theme", "Light", "Light", "Dark")
+//            .mode("Theme", "Light", "Light", "Dark")
             .build());
         register(new RotationSettings());
         register(new FailsafeSettings());

@@ -14,4 +14,6 @@ public abstract class Failsafe {
 
     public void onTick() {}
     public void reset() {}
+    public boolean shouldRunReaction() { return true; }
+    public boolean shouldResumeMacros() { return true; }
 }
