@@ -55,6 +55,17 @@ public class InputUtils {
         }
     }
 
+    public static void clickAttack() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.options == null || client.currentScreen != null) return;
+        setKey(client.options.attackKey, true);
+        if (MouseUtils.isMouseUngrabbed()) {
+            triggerAttackWhenUngrabbed(client);
+        } else {
+            ((MinecraftClientAccessor) client).invokeDoAttack();
+        }
+    }
+
     public static void setJump(boolean pressed) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || client.options == null) return;

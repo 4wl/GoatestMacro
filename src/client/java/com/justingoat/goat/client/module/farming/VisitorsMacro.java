@@ -38,6 +38,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.screen.GenericContainerScreenHandler;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
@@ -115,6 +116,8 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     private static final Pattern ITEM_AMOUNT_AFTER = Pattern.compile("^(?<name>.+?)\\s+x(?<amount>[\\d,]+)$", Pattern.CASE_INSENSITIVE);
     private static final Pattern ITEM_AMOUNT_BEFORE = Pattern.compile("^\\+?(?<amount>[\\d,]+)\\s+(?<name>.+)$", Pattern.CASE_INSENSITIVE);
     private static final double ANTI_STUCK_ESCAPE_CHECK_DISTANCE = 1.35;
+    private static final float ROTATION_RETARGET_YAW_THRESHOLD = 3.0f;
+    private static final float ROTATION_RETARGET_PITCH_THRESHOLD = 2.0f;
     private final List<String> visitors = new ArrayList<>();
     private final Set<String> servedVisitors = new HashSet<>();
     private final Set<String> skippedVisitors = new HashSet<>();
@@ -135,6 +138,8 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     private int noProgressTicks = 0;
     private Vec3d lastProgressPos = null;
     private Float antiStuckEscapeYaw = null;
+    private float lastLookTargetYaw = Float.NaN;
+    private float lastLookTargetPitch = Float.NaN;
     private boolean traveled = false;
     private boolean bazaarCaptureAnnounced = false;
     private boolean signTyped = false;
@@ -273,6 +278,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         }
 
         openAttempts = 0;
+        resetLookTarget();
         resetMovementProgress(client);
         state = State.MOVE_TO_VISITOR;
         debugMsg("Selected " + currentVisitor.name());
@@ -1029,14 +1035,39 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     }
 
     private void lookAt(MinecraftClient client, Entity target, float speed) {
+        if (client.player == null || target == null) return;
         aim.initIfNeeded(client);
         RotationInterpolator.setActive(rotation);
-        aim.aimAtEntity(client, target, speed);
+
+        Vec3d eye = client.player.getEyePos();
+        Vec3d targetPos = target.getBoundingBox().getCenter();
+        float[] look = RotationUtils.lookAt(eye.x, eye.y, eye.z, targetPos.x, targetPos.y, targetPos.z);
+        if (shouldRetargetRotation(look[0], look[1])) {
+            rotation.setTarget(look[0], look[1]);
+            lastLookTargetYaw = look[0];
+            lastLookTargetPitch = look[1];
+        }
+        rotation.setSpeed(speed);
+        rotation.tick();
     }
 
     private void releaseRotation(MinecraftClient client) {
         aim.applyAndClear(client);
         RotationInterpolator.clearActive();
+        resetLookTarget();
+    }
+
+    private boolean shouldRetargetRotation(float yaw, float pitch) {
+        if (!rotation.isActive()) return true;
+        if (Float.isNaN(lastLookTargetYaw) || Float.isNaN(lastLookTargetPitch)) return true;
+        float yawDelta = Math.abs(MathHelper.wrapDegrees(yaw - lastLookTargetYaw));
+        float pitchDelta = Math.abs(pitch - lastLookTargetPitch);
+        return yawDelta >= ROTATION_RETARGET_YAW_THRESHOLD || pitchDelta >= ROTATION_RETARGET_PITCH_THRESHOLD;
+    }
+
+    private void resetLookTarget() {
+        lastLookTargetYaw = Float.NaN;
+        lastLookTargetPitch = Float.NaN;
     }
 
     private void updateAntiStuck(MinecraftClient client) {
@@ -1121,6 +1152,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         noProgressTicks = 0;
         lastProgressPos = null;
         antiStuckEscapeYaw = null;
+        resetLookTarget();
         traveled = false;
         bazaarCaptureAnnounced = false;
         customAmountEntered = false;
@@ -1136,6 +1168,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         currentVisitor = null;
         state = State.WAITING;
         antiStuckEscapeYaw = null;
+        resetLookTarget();
     }
 
     private String cleanName(String name) {

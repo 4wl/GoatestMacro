@@ -12,6 +12,8 @@ import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.failsafe.impl.*;
 import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.module.pathfinder.AStarPathfinder;
+import com.justingoat.goat.client.module.value.BooleanValue;
+import com.justingoat.goat.client.module.value.ModuleValue;
 import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
 import com.justingoat.goat.client.utils.MacroClock;
@@ -75,8 +77,10 @@ public class FailsafeManager {
     public void tick() {
         if (!hasEmergency) {
             for (Failsafe failsafe : failsafes) {
-                if (failsafe.isEnabled()) {
+                if (isFailsafeAllowed(failsafe)) {
                     failsafe.onTick();
+                } else {
+                    failsafe.reset();
                 }
             }
             processEmergencyQueue();
@@ -97,6 +101,7 @@ public class FailsafeManager {
     }
 
     public void triggerEmergency(Failsafe failsafe) {
+        if (!isFailsafeAllowed(failsafe)) return;
         if (!emergencyQueue.contains(failsafe)) {
             emergencyQueue.add(failsafe);
         }
@@ -152,27 +157,56 @@ public class FailsafeManager {
     }
 
     public boolean isAnyMacroActive() {
-        for (GoatModule module : ModuleManager.getModules()) {
-            if (!module.isEnabled()) continue;
-            if (module.getCategory() == ModuleCategory.MACRO) {
-                if (module instanceof MacroScheduler scheduler) {
-                    if (scheduler.isRunningTarget()) return true;
-                    continue;
-                }
+        return !getActiveMacroNames().isEmpty();
+    }
+
+    public boolean isFailsafeRequired(Failsafe failsafe) {
+        for (String macroName : getActiveMacroNames()) {
+            if (FailsafePolicy.isRequired(macroName, failsafe)) {
                 return true;
             }
         }
         return false;
     }
 
+    public boolean isFailsafeAllowed(Failsafe failsafe) {
+        return failsafe.isEnabled()
+            && isFailsafeUserEnabled(failsafe)
+            && isFailsafeRequired(failsafe);
+    }
+
+    private boolean isFailsafeUserEnabled(Failsafe failsafe) {
+        GoatModule settings = ModuleManager.findByName("Failsafe");
+        if (settings == null) return true;
+
+        for (ModuleValue value : settings.getValues()) {
+            if (value instanceof BooleanValue booleanValue && value.getName().equals(failsafe.getName())) {
+                return booleanValue.getValue();
+            }
+        }
+        return true;
+    }
+
+    private List<String> getActiveMacroNames() {
+        List<String> active = new ArrayList<>();
+        for (GoatModule module : ModuleManager.getModules()) {
+            if (!module.isEnabled()) continue;
+            if (module.getCategory() == ModuleCategory.MACRO) {
+                if (module instanceof MacroScheduler scheduler) {
+                    if (!scheduler.isRunningTarget()) continue;
+                    continue;
+                }
+                active.add(module.getName());
+            }
+        }
+        return active;
+    }
+
     public boolean isMovementMacroActive() {
         for (GoatModule module : ModuleManager.getModules()) {
             if (!module.isEnabled()) continue;
             if (module.getCategory() != ModuleCategory.MACRO) continue;
-            if (module instanceof MacroScheduler scheduler) {
-                if (scheduler.isRunningTarget()) return true;
-                continue;
-            }
+            if (module instanceof MacroScheduler) continue;
             if (!module.requiresMovement()) continue;
             return true;
         }

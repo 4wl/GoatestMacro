@@ -89,6 +89,8 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     };
     private static final Pattern STRIP_COLOR = Pattern.compile("§[0-9a-fk-orx]");
     private static final int TRACKER_WAIT_TICKS = 30;
+    private static final int TRACKER_ATTACK_START_TICKS = 3;
+    private static final int TRACKER_ATTACK_RELEASE_TICKS = 8;
     private static final int TRACKER_FOLLOW_TIMEOUT_TICKS = 140;
     private static final double TRACKER_REACHED_DISTANCE = 6.0;
     private static final double TRACKER_WAYPOINT_DISTANCE = 12.0;
@@ -511,9 +513,10 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             debugMsg("Equipped vacuum for Pest Tracker");
         }
 
-        if (trackerTicks == 3) {
+        if (trackerTicks == TRACKER_ATTACK_START_TICKS) {
+            InputUtils.clickAttack();
             InputUtils.setAttack(true);
-        } else if (trackerTicks == 4) {
+        } else if (trackerTicks == TRACKER_ATTACK_RELEASE_TICKS) {
             InputUtils.setAttack(false);
             debugMsg("Activated Pest Tracker");
         }
