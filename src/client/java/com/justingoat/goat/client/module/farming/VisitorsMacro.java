@@ -60,6 +60,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         SELECT_VISITOR,
         MOVE_TO_VISITOR,
         OPEN_VISITOR,
+        WAIT_FOR_GUI,
         HANDLE_GUI,
         BAZAAR_CAPTURE,
         BAZAAR_BUY,
@@ -218,6 +219,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
             case SELECT_VISITOR -> selectVisitor(client);
             case MOVE_TO_VISITOR -> moveToVisitor(client);
             case OPEN_VISITOR -> openVisitor(client);
+            case WAIT_FOR_GUI -> waitForVisitorGui();
             case BAZAAR_CAPTURE -> handleBazaarCapture(client);
             case BAZAAR_BUY -> handleAutoBazaar(client);
             case FINISHED -> finishIfDone();
@@ -329,11 +331,24 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         openAttempts++;
         actionTimer.markNow();
         debugMsg("Interacted with " + currentVisitor.name());
+        releaseRotation(client);
 
         if (openAttempts > 6) {
             skippedVisitors.add(normalizeName(currentVisitor.name()));
             currentVisitor = null;
             state = State.SELECT_VISITOR;
+        } else {
+            state = State.WAIT_FOR_GUI;
+        }
+    }
+
+    private void waitForVisitorGui() {
+        if (currentVisitor == null) {
+            state = State.SELECT_VISITOR;
+            return;
+        }
+        if (canAct()) {
+            state = State.OPEN_VISITOR;
         }
     }
 

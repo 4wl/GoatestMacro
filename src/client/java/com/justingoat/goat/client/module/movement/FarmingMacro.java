@@ -561,6 +561,8 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             } else if (sIsRightWalkable(client)) {
                 state = State.S_RIGHT;
                 debugMsg("S-Shape: LEFT blocked, switching to RIGHT");
+            } else {
+                startSShapeCornerRecovery(client, "s-shape left corner", lockedYaw + 90.0f);
             }
         }
     }
@@ -594,6 +596,8 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             } else if (sIsLeftWalkable(client)) {
                 state = State.S_LEFT;
                 debugMsg("S-Shape: RIGHT blocked, switching to LEFT");
+            } else {
+                startSShapeCornerRecovery(client, "s-shape right corner", lockedYaw - 90.0f);
             }
         }
     }
@@ -1411,6 +1415,10 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
                 InputUtils.releaseAll();
                 antiStuckTicks = 0;
                 antiStuckLastPos = null;
+                if (!isVertical()) {
+                    changeLaneDir = null;
+                    state = State.S_NONE;
+                }
             }
             return true;
         }
@@ -1453,6 +1461,16 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         antiStuckAttempts = 0;
         resetMovementStateAfterStuck(client);
         return true;
+    }
+
+    private void startSShapeCornerRecovery(MinecraftClient client, String reason, float preferredYaw) {
+        InputUtils.releaseAll();
+        antiStuckTicks = 0;
+        antiStuckLastPos = null;
+        antiStuckAttempts = Math.min(antiStuckAttempts + 1, ANTI_STUCK_MAX_NUDGES);
+        antiStuckEscapeYaw = AntiStuckController.chooseEscapeYaw(client, preferredYaw, ANTI_STUCK_ESCAPE_CHECK_DISTANCE);
+        antiStuckNudgeTicks = ANTI_STUCK_NUDGE_TICKS;
+        debugMsg("Anti-stuck corner nudge: " + reason);
     }
 
     private void resetAntiStuck() {
