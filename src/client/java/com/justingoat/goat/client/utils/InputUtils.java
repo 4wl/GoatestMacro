@@ -3,8 +3,18 @@ package com.justingoat.goat.client.utils;
 import com.justingoat.goat.client.mixin.MinecraftClientAccessor;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
 
 public class InputUtils {
+    private static boolean macroAttackPressed = false;
+    private static boolean macroUsePressed = false;
+    private static BlockPos ungrabbedBreakTarget = null;
+    private static Direction ungrabbedBreakSide = null;
+
     public static void setForward(boolean pressed) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || client.options == null) return;
@@ -32,8 +42,15 @@ public class InputUtils {
     public static void setAttack(boolean pressed) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || client.options == null) return;
+        boolean wasPressed = macroAttackPressed;
+        macroAttackPressed = pressed;
+        if (MouseUtils.isMouseUngrabbed()) {
+            MouseUtils.setCursorLockedForMacroInput(pressed);
+        }
         setKey(client.options.attackKey, pressed);
-        if (pressed) {
+        if (!pressed) {
+            stopUngrabbedBlockBreaking(client);
+        } else if (pressed && !wasPressed) {
             triggerAttackWhenUngrabbed(client);
         }
     }
@@ -59,6 +76,7 @@ public class InputUtils {
     public static void setUse(boolean pressed) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || client.options == null) return;
+        macroUsePressed = pressed;
         setKey(client.options.useKey, pressed);
         if (pressed) {
             triggerUseWhenUngrabbed(client);
@@ -89,13 +107,86 @@ public class InputUtils {
         }
     }
 
+    public static void tickUngrabbedMouseInputs(MinecraftClient client) {
+        if (!canSendMouseInputWhenUngrabbed(client)) return;
+
+        if (macroAttackPressed) {
+            triggerAttackWhenUngrabbed(client);
+        } else {
+            stopUngrabbedBlockBreaking(client);
+        }
+
+        if (macroUsePressed) {
+            triggerUseWhenUngrabbed(client);
+        }
+    }
+
     private static void triggerAttackWhenUngrabbed(MinecraftClient client) {
-        if (client.currentScreen != null || client.mouse == null || client.mouse.isCursorLocked()) return;
+        if (!canSendMouseInputWhenUngrabbed(client)) return;
+        if (tryBreakBlockWhenUngrabbed(client)) return;
+
         ((MinecraftClientAccessor) client).invokeDoAttack();
     }
 
     private static void triggerUseWhenUngrabbed(MinecraftClient client) {
-        if (client.currentScreen != null || client.mouse == null || client.mouse.isCursorLocked()) return;
+        if (!canSendMouseInputWhenUngrabbed(client)) return;
         ((MinecraftClientAccessor) client).invokeDoItemUse();
+    }
+
+    private static boolean canSendMouseInputWhenUngrabbed(MinecraftClient client) {
+        return client != null
+            && client.currentScreen == null
+            && client.mouse != null
+            && MouseUtils.isMouseUngrabbed()
+            && !client.mouse.isCursorLocked();
+    }
+
+    private static boolean tryBreakBlockWhenUngrabbed(MinecraftClient client) {
+        if (client.player == null || client.world == null || client.interactionManager == null) {
+            resetUngrabbedBlockBreaking();
+            return false;
+        }
+
+        if (ungrabbedBreakTarget != null && ungrabbedBreakSide != null) {
+            if (client.world.isAir(ungrabbedBreakTarget)) {
+                resetUngrabbedBlockBreaking();
+                return false;
+            }
+            client.interactionManager.updateBlockBreakingProgress(ungrabbedBreakTarget, ungrabbedBreakSide);
+            client.player.swingHand(Hand.MAIN_HAND);
+            return true;
+        }
+
+        if (client.crosshairTarget == null || client.crosshairTarget.getType() != HitResult.Type.BLOCK) {
+            stopUngrabbedBlockBreaking(client);
+            return false;
+        }
+
+        BlockHitResult hit = (BlockHitResult) client.crosshairTarget;
+        BlockPos pos = hit.getBlockPos();
+        Direction side = hit.getSide();
+
+        client.interactionManager.attackBlock(pos, side);
+        ungrabbedBreakTarget = pos.toImmutable();
+        ungrabbedBreakSide = side;
+        client.player.swingHand(Hand.MAIN_HAND);
+        return true;
+    }
+
+    private static void stopUngrabbedBlockBreaking(MinecraftClient client) {
+        if (ungrabbedBreakTarget == null) return;
+        resetUngrabbedBlockBreaking();
+        if (client != null) {
+            if (client.interactionManager != null) {
+                client.interactionManager.cancelBlockBreaking();
+            } else {
+                ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(false);
+            }
+        }
+    }
+
+    private static void resetUngrabbedBlockBreaking() {
+        ungrabbedBreakTarget = null;
+        ungrabbedBreakSide = null;
     }
 }

@@ -59,4 +59,19 @@ public class ChatUtils {
         sendMessage("§6§l" + title);
         sendSeparator();
     }
+    public static void moduleSuccess(String module, String message) {
+        sendSuccessMessage("[" + module + "] " + message);
+    }
+
+    public static void moduleWarning(String module, String message) {
+        sendWarningMessage("[" + module + "] " + message);
+    }
+
+    public static void moduleError(String module, String message) {
+        sendErrorMessage("[" + module + "] " + message);
+    }
+
+    public static void moduleInfo(String module, String message) {
+        sendInfoMessage("[" + module + "] " + message);
+    }
 }

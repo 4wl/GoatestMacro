@@ -4,12 +4,14 @@ import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.failsafe.Failsafe;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
+import com.justingoat.goat.client.utils.MacroClock;
 
 public class RotationFailsafe extends Failsafe {
     private float lastYaw = 0;
     private float lastPitch = 0;
     private boolean initialized = false;
-    private long suppressUntil = 0;
+    private final MacroClock suppressClock = new MacroClock();
+    private boolean suppressing = false;
 
     @Override
     public int getPriority() {
@@ -33,12 +35,13 @@ public class RotationFailsafe extends Failsafe {
             return;
         }
 
-        if (System.currentTimeMillis() < suppressUntil) {
+        if (suppressing && !suppressClock.ready(0L)) {
             lastYaw = client.player.getYaw();
             lastPitch = client.player.getPitch();
             initialized = true;
             return;
         }
+        suppressing = false;
 
         if (isMacroControllingRotation()) {
             lastYaw = client.player.getYaw();
@@ -72,12 +75,13 @@ public class RotationFailsafe extends Failsafe {
     @Override
     public void reset() {
         initialized = false;
-        suppressUntil = 0;
+        suppressing = false;
+        suppressClock.resetReady();
     }
 
     public void suppressFor(long durationMs) {
-        long now = System.currentTimeMillis();
-        suppressUntil = Math.max(suppressUntil, now + Math.max(0, durationMs));
+        suppressClock.delay(durationMs);
+        suppressing = true;
     }
 
     private boolean isMacroControllingRotation() {

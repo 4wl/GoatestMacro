@@ -14,6 +14,7 @@ import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.module.pathfinder.AStarPathfinder;
 import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.MacroClock;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.BlockPos;
@@ -25,16 +26,16 @@ public class FailsafeManager {
     private final List<Failsafe> failsafes = new ArrayList<>();
     private final List<Failsafe> emergencyQueue = new ArrayList<>();
     private final FailsafeReactionController reactionController = new FailsafeReactionController();
+    private final MacroClock emergencyClock = new MacroClock();
+    private final MacroClock returnClock = new MacroClock();
     private boolean hasEmergency = false;
     private Failsafe activeFailsafe = null;
-    private long emergencyStartTime = 0;
     private final List<String> disabledMacroNames = new ArrayList<>();
     private BlockPos savedReturnBlock = null;
     private float savedReturnYaw = 0.0f;
     private float savedReturnPitch = 0.0f;
     private boolean returningToSavedPosition = false;
     private boolean returnPathStarted = false;
-    private long returnStartTime = 0L;
 
     private FailsafeManager() {
         register(new BadEffectsFailsafe());
@@ -105,7 +106,7 @@ public class FailsafeManager {
         if (emergencyQueue.isEmpty()) return;
 
         hasEmergency = true;
-        emergencyStartTime = System.currentTimeMillis();
+        emergencyClock.mark();
         emergencyQueue.sort(Comparator.comparingInt(Failsafe::getPriority));
         activeFailsafe = emergencyQueue.get(0);
         emergencyQueue.clear();
@@ -127,7 +128,7 @@ public class FailsafeManager {
         savedReturnBlock = null;
         returningToSavedPosition = false;
         returnPathStarted = false;
-        returnStartTime = 0L;
+        returnClock.resetReady();
 
         if (client.player == null || client.world == null) return;
 
@@ -164,6 +165,20 @@ public class FailsafeManager {
         return false;
     }
 
+    public boolean isMovementMacroActive() {
+        for (GoatModule module : ModuleManager.getModules()) {
+            if (!module.isEnabled()) continue;
+            if (module.getCategory() != ModuleCategory.MACRO) continue;
+            if (module instanceof MacroScheduler scheduler) {
+                if (scheduler.isRunningTarget()) return true;
+                continue;
+            }
+            if (!module.requiresMovement()) continue;
+            return true;
+        }
+        return false;
+    }
+
     public boolean hasEmergency() {
         return hasEmergency;
     }
@@ -196,7 +211,7 @@ public class FailsafeManager {
         if (!returnPathStarted) {
             returningToSavedPosition = true;
             returnPathStarted = true;
-            returnStartTime = System.currentTimeMillis();
+            returnClock.mark();
             ChatUtils.sendInfoMessage("Returning to pre-failsafe position before resuming macro...");
             pathfinder.pathTargetWalkAllowWater(savedReturnBlock);
             return;
@@ -209,7 +224,7 @@ public class FailsafeManager {
             return;
         }
 
-        if (System.currentTimeMillis() - returnStartTime > RETURN_TIMEOUT_MS) {
+        if (returnClock.timeout(RETURN_TIMEOUT_MS)) {
             pathfinder.setEnabled(false);
             abortReturnAndKeepMacrosPaused("Return to pre-failsafe position timed out. Macro will stay paused.");
             return;
@@ -283,13 +298,13 @@ public class FailsafeManager {
         boolean wasReturning = returningToSavedPosition;
         hasEmergency = false;
         activeFailsafe = null;
-        emergencyStartTime = 0;
+        emergencyClock.resetReady();
         emergencyQueue.clear();
         disabledMacroNames.clear();
         savedReturnBlock = null;
         returningToSavedPosition = false;
         returnPathStarted = false;
-        returnStartTime = 0L;
+        returnClock.resetReady();
         reactionController.stop();
         GoatModule pathfinder = ModuleManager.findByName("Pathfinder");
         if (wasReturning && pathfinder != null) {

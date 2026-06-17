@@ -4,6 +4,8 @@ import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.farming.PestCleaner;
 import com.justingoat.goat.client.module.value.NumberValue;
+import com.justingoat.goat.client.utils.EntitySearchUtils;
+import com.justingoat.goat.client.utils.WorldUtils;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.Vec3d;
 
@@ -45,19 +47,16 @@ public final class PestESP extends GoatModule {
             return lines;
         }
 
-        PestCleaner.PestInfo nearest = null;
-        double nearestDistSq = Double.MAX_VALUE;
-        for (PestCleaner.PestInfo pest : pests) {
-            if (pest == null || pest.nameTag.isRemoved()) continue;
-            double distSq = client.player.squaredDistanceTo(pest.pestPos.x, pest.pestPos.y, pest.pestPos.z);
-            if (nearest == null || distSq < nearestDistSq) {
-                nearest = pest;
-                nearestDistSq = distSq;
-            }
-        }
+        PestCleaner.PestInfo nearest = EntitySearchUtils.nearest(
+            pests,
+            WorldUtils.playerPos(client),
+            pest -> pest != null && !pest.nameTag.isRemoved(),
+            pest -> pest.pestPos
+        ).orElse(null);
 
         if (nearest != null) {
             Vec3d pos = nearest.pestPos;
+            double nearestDistSq = client.player.squaredDistanceTo(pos.x, pos.y, pos.z);
             lines.add("Nearest Pest: " + nearest.name + " "
                 + Math.round(Math.sqrt(nearestDistSq)) + "m @ "
                 + Math.round(pos.x) + ", " + Math.round(pos.y) + ", " + Math.round(pos.z));

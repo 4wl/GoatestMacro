@@ -5,12 +5,13 @@ import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.failsafe.Failsafe;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.ConditionTimer;
 import net.minecraft.item.AxeItem;
 import net.minecraft.item.HoeItem;
 import net.minecraft.item.ItemStack;
 
 public class ItemChangeFailsafe extends Failsafe {
-    private long invalidToolSince = 0L;
+    private final ConditionTimer invalidToolTimer = new ConditionTimer();
 
     @Override
     public int getPriority() { return 3; }
@@ -21,25 +22,23 @@ public class ItemChangeFailsafe extends Failsafe {
     @Override
     public void onTick() {
         if (!FailsafeDetectionUtils.canCheckMacro() || !isFarmingMacroActive()) {
-            invalidToolSince = 0L;
+            invalidToolTimer.reset();
             return;
         }
 
         // PestCleaner intentionally switches from hoe to vacuum — suppress detection
         if (isPestCleanerActive()) {
-            invalidToolSince = 0L;
+            invalidToolTimer.reset();
             return;
         }
 
         ItemStack held = client.player.getMainHandStack();
         if (!held.isEmpty() && (held.getItem() instanceof HoeItem || held.getItem() instanceof AxeItem)) {
-            invalidToolSince = 0L;
+            invalidToolTimer.reset();
             return;
         }
 
-        long now = System.currentTimeMillis();
-        if (invalidToolSince == 0L) invalidToolSince = now;
-        if (now - invalidToolSince < 1_000L) return;
+        if (!invalidToolTimer.confirmed(1_000L)) return;
 
         ChatUtils.sendWarningMessage("Failsafe: farming tool is no longer held");
         FailsafeManager.getInstance().triggerEmergency(this);
@@ -57,6 +56,6 @@ public class ItemChangeFailsafe extends Failsafe {
 
     @Override
     public void reset() {
-        invalidToolSince = 0L;
+        invalidToolTimer.reset();
     }
 }

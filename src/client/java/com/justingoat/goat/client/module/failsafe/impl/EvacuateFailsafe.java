@@ -8,6 +8,7 @@ import com.justingoat.goat.client.module.movement.FarmingMacro;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.CommandUtils;
 
 public class EvacuateFailsafe extends Failsafe {
     @Override
@@ -23,9 +24,7 @@ public class EvacuateFailsafe extends Failsafe {
         if (!isEvacuateMessage(message)) return;
         if (isFarmingServerRecoveryActive()) return;
 
-        if (client.player != null && client.player.networkHandler != null) {
-            client.player.networkHandler.sendChatCommand("evacuate");
-        }
+        CommandUtils.evacuate(client);
         ChatUtils.sendWarningMessage("Failsafe: server evacuation requested");
         FailsafeManager.getInstance().triggerEmergency(this);
     }

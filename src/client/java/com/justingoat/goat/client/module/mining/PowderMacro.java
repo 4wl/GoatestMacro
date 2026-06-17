@@ -3,15 +3,17 @@ package com.justingoat.goat.client.module.mining;
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.value.NumberValue;
+import com.justingoat.goat.client.utils.BlockScanner;
+import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.MacroClock;
 import com.justingoat.goat.client.utils.RotationUtils;
-import net.minecraft.block.BlockState;
+import com.justingoat.goat.client.utils.StateTimer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.registry.Registries;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
-import net.minecraft.text.Text;
+import net.minecraft.util.math.Vec3d;
 
 public class PowderMacro extends GoatModule {
 
@@ -19,9 +21,9 @@ public class PowderMacro extends GoatModule {
 
     private final NumberValue height, width, speed, compression, maxPitch;
 
-    private PowderState state = PowderState.IDLE;
+    private final StateTimer<PowderState> stateTimer = new StateTimer<>(PowderState.IDLE);
     private float pivotYaw, pivotPitch;
-    private long startTime;
+    private final MacroClock loopClock = new MacroClock();
     private float savedYaw, savedPitch;
     private boolean hasSavedRotation;
     private BlockPos targetChest;
@@ -46,7 +48,7 @@ public class PowderMacro extends GoatModule {
         maxPitch = addNumber("MaxPitch", 75, 45, 90);
     }
 
-    public PowderState getPowderState() { return state; }
+    public PowderState getPowderState() { return stateTimer.state(); }
 
     @Override
     public void setEnabled(boolean enabled) {
@@ -58,16 +60,16 @@ public class PowderMacro extends GoatModule {
 
             pivotYaw = client.player.getYaw();
             pivotPitch = client.player.getPitch();
-            startTime = System.currentTimeMillis();
+            loopClock.mark();
             hasSavedRotation = false;
             targetChest = null;
-            state = PowderState.MINING;
+            setState(PowderState.MINING);
 
             InputUtils.setAttack(true);
             InputUtils.setSneak(true);
             message("§a[Goat] PowderMacro enabled.");
         } else if (!enabled && wasEnabled) {
-            state = PowderState.IDLE;
+            setState(PowderState.IDLE);
             InputUtils.setAttack(false);
             InputUtils.setSneak(false);
             targetChest = null;
@@ -79,7 +81,7 @@ public class PowderMacro extends GoatModule {
     public void tick(MinecraftClient client) {
         if (!isEnabled() || client.player == null) return;
 
-        switch (state) {
+        switch (stateTimer.state()) {
             case MINING -> tickMining(client);
             case CHEST -> tickChest(client);
             case RETURNING -> tickReturning(client);
@@ -88,7 +90,7 @@ public class PowderMacro extends GoatModule {
     }
 
     public void onChestSpawn() {
-        if (!isEnabled() || state == PowderState.CHEST) return;
+        if (!isEnabled() || stateTimer.is(PowderState.CHEST)) return;
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return;
 
@@ -96,7 +98,7 @@ public class PowderMacro extends GoatModule {
         savedPitch = client.player.getPitch();
         hasSavedRotation = true;
         targetChest = null;
-        state = PowderState.CHEST;
+        setState(PowderState.CHEST);
     }
 
     public void onChestOpen() {
@@ -104,12 +106,12 @@ public class PowderMacro extends GoatModule {
         targetChest = null;
         InputUtils.setSneak(true);
         InputUtils.setAttack(true);
-        state = PowderState.RETURNING;
+        setState(PowderState.RETURNING);
     }
 
     private void tickMining(MinecraftClient client) {
         ClientPlayerEntity player = client.player;
-        double elapsed = (System.currentTimeMillis() - startTime) / 1000.0;
+        double elapsed = loopClock.elapsed() / 1000.0;
         double angle = elapsed * speed.getValue();
 
         double dPitch = Math.sin(angle) * height.getValue();
@@ -126,8 +128,7 @@ public class PowderMacro extends GoatModule {
         InputUtils.setSneak(false);
 
         if (targetChest != null) {
-            String blockId = Registries.BLOCK.getId(client.world.getBlockState(targetChest).getBlock()).toString();
-            if (!blockId.contains("chest")) {
+            if (!BlockScanner.registryId(client, targetChest).contains("chest")) {
                 targetChest = null;
             }
         }
@@ -137,9 +138,15 @@ public class PowderMacro extends GoatModule {
         }
 
         if (targetChest != null) {
-            float yaw = aimYaw(client.player, targetChest);
-            float pitch = aimPitch(client.player, targetChest);
-            applyRotation(client.player, yaw, pitch);
+            float[] look = RotationUtils.lookAt(
+                client.player.getEyePos().x,
+                client.player.getEyePos().y,
+                client.player.getEyePos().z,
+                targetChest.getX() + 0.5,
+                targetChest.getY() + 0.5,
+                targetChest.getZ() + 0.5
+            );
+            applyRotation(client.player, look[0], look[1]);
         }
     }
 
@@ -154,7 +161,7 @@ public class PowderMacro extends GoatModule {
 
         if (dist < RETURN_THRESHOLD) {
             syncLoopAngle(player);
-            state = PowderState.MINING;
+            setState(PowderState.MINING);
         } else {
             applyRotation(player, player.getYaw() + diffYaw * RETURN_SPEED,
                     player.getPitch() + diffPitch * RETURN_SPEED);
@@ -168,49 +175,14 @@ public class PowderMacro extends GoatModule {
             dPitch /= compression.getValue();
         }
         double currentAngle = Math.atan2(dPitch / height.getValue(), dYaw / width.getValue());
-        startTime = System.currentTimeMillis() - (long) ((currentAngle / speed.getValue()) * 1000);
+        loopClock.markOffsetFromNow(-(long) ((currentAngle / speed.getValue()) * 1000));
     }
 
     private BlockPos findNearestChest(MinecraftClient client) {
         if (client.player == null || client.world == null) return null;
-        int bx = MathHelper.floor(client.player.getX());
-        int by = MathHelper.floor(client.player.getY());
-        int bz = MathHelper.floor(client.player.getZ());
-
-        BlockPos closest = null;
-        double closestDist = Double.MAX_VALUE;
-
-        for (int dx = -CHEST_SEARCH_RADIUS; dx <= CHEST_SEARCH_RADIUS; dx++) {
-            for (int dy = -CHEST_SEARCH_RADIUS; dy <= CHEST_SEARCH_RADIUS; dy++) {
-                for (int dz = -CHEST_SEARCH_RADIUS; dz <= CHEST_SEARCH_RADIUS; dz++) {
-                    if (dx == 0 && dy == 0 && dz == 0) continue;
-                    BlockPos pos = new BlockPos(bx + dx, by + dy, bz + dz);
-                    String id = Registries.BLOCK.getId(client.world.getBlockState(pos).getBlock()).toString();
-                    if (id.contains("chest")) {
-                        double d = dx * dx + dy * dy + dz * dz;
-                        if (d < closestDist) {
-                            closestDist = d;
-                            closest = pos;
-                        }
-                    }
-                }
-            }
-        }
-        return closest;
-    }
-
-    private static float aimYaw(ClientPlayerEntity player, BlockPos target) {
-        double dx = target.getX() + 0.5 - player.getX();
-        double dz = target.getZ() + 0.5 - player.getZ();
-        return (float) -(Math.toDegrees(Math.atan2(dx, dz)));
-    }
-
-    private static float aimPitch(ClientPlayerEntity player, BlockPos target) {
-        double dx = target.getX() + 0.5 - player.getX();
-        double dy = target.getY() + 0.5 - player.getEyePos().y;
-        double dz = target.getZ() + 0.5 - player.getZ();
-        double dist = Math.sqrt(dx * dx + dz * dz);
-        return (float) -(Math.toDegrees(Math.atan2(dy, dist)));
+        return BlockScanner.findClosest(client, client.player.getBlockPos(), CHEST_SEARCH_RADIUS, CHEST_SEARCH_RADIUS,
+            CHEST_SEARCH_RADIUS, pos -> !pos.equals(client.player.getBlockPos()) && BlockScanner.registryId(client, pos).contains("chest")
+        ).orElse(null);
     }
 
     private static void applyRotation(ClientPlayerEntity player, float targetYaw, float targetPitch) {
@@ -223,7 +195,10 @@ public class PowderMacro extends GoatModule {
     }
 
     private void message(String msg) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) client.player.sendMessage(Text.literal(msg), false);
+        ChatUtils.sendRawMessage(msg);
+    }
+
+    private void setState(PowderState next) {
+        stateTimer.set(next);
     }
 }

@@ -3,10 +3,11 @@ package com.justingoat.goat.client.module.failsafe.impl;
 import com.justingoat.goat.client.module.failsafe.Failsafe;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.ConditionTimer;
 import net.minecraft.block.Blocks;
 
 public class CobwebFailsafe extends Failsafe {
-    private long firstSeenAt = 0L;
+    private final ConditionTimer seenTimer = new ConditionTimer();
 
     @Override
     public int getPriority() { return 3; }
@@ -17,19 +18,17 @@ public class CobwebFailsafe extends Failsafe {
     @Override
     public void onTick() {
         if (!FailsafeDetectionUtils.canCheckGardenMacro()) {
-            firstSeenAt = 0L;
+            seenTimer.reset();
             return;
         }
 
         int cobwebs = FailsafeDetectionUtils.countNearby(Blocks.COBWEB, 1, 1, 2);
         if (cobwebs == 0) {
-            firstSeenAt = 0L;
+            seenTimer.reset();
             return;
         }
 
-        long now = System.currentTimeMillis();
-        if (firstSeenAt == 0L) firstSeenAt = now;
-        if (now - firstSeenAt < 300L) return;
+        if (!seenTimer.confirmed(300L)) return;
 
         ChatUtils.sendWarningMessage("Failsafe: cobweb detected near player");
         FailsafeManager.getInstance().triggerEmergency(this);
@@ -37,6 +36,6 @@ public class CobwebFailsafe extends Failsafe {
 
     @Override
     public void reset() {
-        firstSeenAt = 0L;
+        seenTimer.reset();
     }
 }

@@ -1,15 +1,15 @@
 package com.justingoat.goat.client.module.pathfinder;
 
+import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.SkyBlockToolUtils;
 import it.unimi.dsi.fastutil.longs.Long2DoubleOpenHashMap;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.world.ClientWorld;
-import net.minecraft.item.ItemStack;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
-import net.minecraft.text.Text;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -58,7 +58,7 @@ public class EtherwarpPathfinder {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null || client.world == null) return;
 
-        if (findAotvSlot(client.player) < 0) {
+        if (SkyBlockToolUtils.findAoteOrAotvSlot(client.player) < 0) {
             message("§c[Goat] No AOTV/AOTE in hotbar.");
             state = State.FAILED;
             return;
@@ -144,7 +144,7 @@ public class EtherwarpPathfinder {
         ClientPlayerEntity player = client.player;
         if (player == null) { fail("Player null"); return; }
 
-        int slot = findAotvSlot(player);
+        int slot = SkyBlockToolUtils.findAoteOrAotvSlot(player);
         if (slot < 0) { fail("Lost AOTV/AOTE"); return; }
 
         if (originalSlot < 0) originalSlot = player.getInventory().getSelectedSlot();
@@ -181,7 +181,7 @@ public class EtherwarpPathfinder {
 
         switch (hopPhase) {
             case EQUIP -> {
-                int slot = findAotvSlot(player);
+                int slot = SkyBlockToolUtils.findAoteOrAotvSlot(player);
                 if (slot < 0) { fail("Lost AOTV/AOTE"); return; }
                 InputUtils.setHotbarSlot(slot);
                 hopPhase = HopPhase.AIM;
@@ -263,21 +263,8 @@ public class EtherwarpPathfinder {
         return null;
     }
 
-    private int findAotvSlot(ClientPlayerEntity player) {
-        for (int i = 0; i < 9; i++) {
-            ItemStack stack = player.getInventory().getStack(i);
-            if (stack.isEmpty()) continue;
-            String name = stack.getName().getString();
-            if (name.contains("Aspect of the Void") || name.contains("Aspect of the End")) return i;
-        }
-        return -1;
-    }
-
     private static void message(String msg) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) {
-            client.player.sendMessage(Text.literal(msg), false);
-        }
+        ChatUtils.sendRawMessage(msg);
     }
 
     // ─────────────────── A* Search ───────────────────

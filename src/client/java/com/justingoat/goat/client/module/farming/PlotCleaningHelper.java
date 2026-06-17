@@ -5,10 +5,15 @@ import com.justingoat.goat.client.module.MacroHudInfo;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.NumberValue;
+import com.justingoat.goat.client.utils.AimController;
+import com.justingoat.goat.client.utils.BlockScanner;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.InventoryUtils;
 import com.justingoat.goat.client.utils.LagDetector;
 import com.justingoat.goat.client.utils.PlotUtils;
-import com.justingoat.goat.client.utils.RotationUtils;
+import com.justingoat.goat.client.utils.SkyBlockToolUtils;
+import com.justingoat.goat.client.utils.TickTimer;
+import com.justingoat.goat.client.utils.ToolSelector;
 
 import net.minecraft.block.Block;
 import net.minecraft.client.MinecraftClient;
@@ -20,10 +25,6 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-
 public class PlotCleaningHelper extends GoatModule implements MacroHudInfo {
     private enum ToolType { SCYTHE, AXE, PICKAXE }
 
@@ -31,13 +32,13 @@ public class PlotCleaningHelper extends GoatModule implements MacroHudInfo {
     private final BooleanValue autoTool;
     private final BooleanValue lagPause;
     private final BooleanValue debug;
-    private final RotationUtils rotation = new RotationUtils();
+    private final AimController aim = new AimController();
 
     private BlockPos target = null;
     private BlockPos activeBreak = null;
     private ToolType targetTool = null;
     private int scanDelay = 0;
-    private int brokenCooldownTicks = 0;
+    private final TickTimer brokenCooldown = new TickTimer();
 
     public PlotCleaningHelper() {
         super("PlotCleaningHelper", ModuleCategory.MACRO, false);
@@ -64,7 +65,7 @@ public class PlotCleaningHelper extends GoatModule implements MacroHudInfo {
             return;
         }
 
-        if (brokenCooldownTicks > 0) brokenCooldownTicks--;
+        brokenCooldown.tick();
         if (target == null || !canMine(client, target)) {
             target = null;
             activeBreak = null;
@@ -90,21 +91,13 @@ public class PlotCleaningHelper extends GoatModule implements MacroHudInfo {
                 target = null;
                 return;
             }
-            client.player.getInventory().setSelectedSlot(slot);
+            InventoryUtils.equipHotbarSlot(client, slot);
         }
 
         Vec3d center = Vec3d.ofCenter(target);
-        float[] look = RotationUtils.lookAt(
-            client.player.getX(), client.player.getEyeY(), client.player.getZ(),
-            center.x, center.y, center.z
-        );
-        rotation.setTarget(look[0], look[1]);
-        rotation.setSpeed(0.75f);
-        rotation.tick();
-        client.player.setYaw(rotation.getCurrentYaw());
-        client.player.setPitch(rotation.getCurrentPitch());
+        aim.aimAtAndApply(client, center, 0.75f);
 
-        if (!rotation.isRoughlyFacing() || client.player.getEyePos().squaredDistanceTo(center) > 5.2 * 5.2) {
+        if (!aim.isRoughlyFacing() || client.player.getEyePos().squaredDistanceTo(center) > 5.2 * 5.2) {
             InputUtils.setAttack(false);
             return;
         }
@@ -130,7 +123,7 @@ public class PlotCleaningHelper extends GoatModule implements MacroHudInfo {
         target = null;
         activeBreak = null;
         targetTool = null;
-        rotation.clear();
+        aim.clear();
         InputUtils.releaseAll();
     }
 
@@ -138,26 +131,14 @@ public class PlotCleaningHelper extends GoatModule implements MacroHudInfo {
         int radius = (int) scanRadius.getValue();
         BlockPos player = client.player.getBlockPos();
         Integer plotId = PlotUtils.getPlotIdAt(player);
-        List<BlockPos> candidates = new ArrayList<>();
-
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dy = -3; dy <= 3; dy++) {
-                for (int dz = -radius; dz <= radius; dz++) {
-                    BlockPos pos = player.add(dx, dy, dz).toImmutable();
-                    if (plotId != null && !PlotUtils.isInsidePlot(plotId, Vec3d.ofCenter(pos))) continue;
-                    if (!canMine(client, pos)) continue;
-                    candidates.add(pos);
-                }
-            }
-        }
-
-        return candidates.stream()
-            .min(Comparator.comparingDouble(pos -> client.player.getEyePos().squaredDistanceTo(Vec3d.ofCenter(pos))))
-            .orElse(null);
+        return BlockScanner.findClosest(client, player, radius, 3, 3, pos -> {
+            if (plotId != null && !PlotUtils.isInsidePlot(plotId, Vec3d.ofCenter(pos))) return false;
+            return canMine(client, pos);
+        }).orElse(null);
     }
 
     private boolean canMine(MinecraftClient client, BlockPos pos) {
-        if (brokenCooldownTicks > 0 && pos.equals(activeBreak)) return false;
+        if (brokenCooldown.active() && pos.equals(activeBreak)) return false;
         ToolType type = classify(client, pos);
         if (type == null) return false;
         if (!client.player.isOnGround() && type != ToolType.SCYTHE) return false;
@@ -186,22 +167,22 @@ public class PlotCleaningHelper extends GoatModule implements MacroHudInfo {
 
     private boolean currentHeldToolMatches(MinecraftClient client, ToolType type) {
         ItemStack stack = client.player.getMainHandStack();
-        return !stack.isEmpty() && itemNameMatches(stack.getName().getString(), type);
+        return !stack.isEmpty() && itemNameMatches(stack, type);
     }
 
     private int findToolSlot(MinecraftClient client, ToolType type) {
-        for (int slot = 0; slot < 9; slot++) {
-            ItemStack stack = client.player.getInventory().getStack(slot);
-            if (!stack.isEmpty() && itemNameMatches(stack.getName().getString(), type)) return slot;
-        }
-        return -1;
+        return switch (type) {
+            case SCYTHE -> ToolSelector.findBest(client, ToolSelector.Category.SCYTHE);
+            case AXE -> ToolSelector.findBest(client, ToolSelector.Category.AXE);
+            case PICKAXE -> ToolSelector.findBest(client, ToolSelector.Category.STONK_OR_PICKAXE);
+        };
     }
 
-    private boolean itemNameMatches(String name, ToolType type) {
+    private boolean itemNameMatches(ItemStack stack, ToolType type) {
         return switch (type) {
-            case SCYTHE -> name.contains("Scythe");
-            case AXE -> name.contains("Treecapitator") || (name.contains("Axe") && !name.contains("Pick"));
-            case PICKAXE -> name.contains("Pickaxe") || name.contains("Stonk");
+            case SCYTHE -> SkyBlockToolUtils.isScythe(stack);
+            case AXE -> SkyBlockToolUtils.isAxe(stack);
+            case PICKAXE -> SkyBlockToolUtils.isStonkOrPickaxe(stack);
         };
     }
 

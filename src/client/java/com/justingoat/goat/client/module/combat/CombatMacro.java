@@ -11,13 +11,19 @@ import com.justingoat.goat.client.module.pathfinder.PathProcessor;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.ModeValue;
 import com.justingoat.goat.client.module.value.NumberValue;
+import com.justingoat.goat.client.utils.ActionTimer;
+import com.justingoat.goat.client.utils.AimController;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.EntitySearchUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.MacroClock;
+import com.justingoat.goat.client.utils.MacroControls;
 import com.justingoat.goat.client.utils.MouseUtils;
 import com.justingoat.goat.client.utils.RandomUtils;
 import com.justingoat.goat.client.utils.RotationInterpolator;
 import com.justingoat.goat.client.utils.RotationUtils;
 import com.justingoat.goat.client.utils.ScoreboardUtils;
+import com.justingoat.goat.client.utils.SkyBlockTextUtils;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
@@ -78,6 +84,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
 
     // ── Rotation ────────────────────────────────────────────────────────
     private final RotationUtils rotation = new RotationUtils();
+    private final AimController aim = new AimController(rotation);
 
     // ── Pathfinder (for far pursuit) ────────────────────────────────────
     private final PathProcessor pathProcessor = new PathProcessor();
@@ -89,7 +96,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     private static final int TARGET_LOST_THRESHOLD = 40; // 2 seconds
 
     // ── Attack timing ───────────────────────────────────────────────────
-    private long lastAttackMs = 0;
+    private final ActionTimer attackTimer = new ActionTimer();
     private int nextAttackDelayMs = 0;
 
     // ── Heal state ──────────────────────────────────────────────────────
@@ -98,6 +105,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     private static final int HEAL_DURATION_TICKS = 15; // 0.75s hold
 
     // ── Anti-player ─────────────────────────────────────────────────────
+    private final MacroClock threatClock = new MacroClock();
     private final java.util.Map<AbstractClientPlayerEntity, Long> playerStareMap = new java.util.HashMap<>();
     private int waitingTicks = 0;
     private static final int WAITING_CLEAR_TICKS = 60; // 3 seconds of no threat → resume
@@ -141,7 +149,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
             state = State.SEARCHING;
             currentTarget = null;
             targetLostTicks = 0;
-            lastAttackMs = 0;
+            attackTimer.resetReady();
             nextAttackDelayMs = 0;
             healTicksRemaining = 0;
             previousSlot = -1;
@@ -160,16 +168,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
 
     private void stopAllActions() {
         if (pathProcessor.getPath() != null) pathProcessor.stop();
-        if (rotation.isActive()) {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.player != null) {
-                client.player.setYaw(rotation.getCurrentYaw());
-                client.player.setPitch(rotation.getCurrentPitch());
-            }
-        }
-        rotation.clear();
-        RotationInterpolator.clearActive();
-        InputUtils.releaseAll();
+        MacroControls.stopAllAndClearRotation(MinecraftClient.getInstance(), aim);
         currentTarget = null;
         pathing = false;
     }
@@ -202,9 +201,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     private void tickSearching(MinecraftClient client) {
         // Release rotation control when not tracking a target
         if (rotation.isActive()) {
-            client.player.setYaw(rotation.getCurrentYaw());
-            client.player.setPitch(rotation.getCurrentPitch());
-            rotation.clear();
+            aim.applyAndClear(client);
             RotationInterpolator.clearActive();
         }
 
@@ -287,7 +284,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
             } else if (!pathing) {
                 requestRepath(client, currentTarget.getBlockPos().down());
             } else {
-                InputUtils.releaseAll();
+                MacroControls.stopAll();
             }
             return;
         }
@@ -314,7 +311,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
             if (!pathing) {
                 requestRepath(client, currentTarget.getBlockPos().down());
             }
-            InputUtils.releaseAll();
+            MacroControls.stopAll();
         }
     }
 
@@ -401,15 +398,10 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     private void abortPursuit() {
         if (pathProcessor.getPath() != null) pathProcessor.stop();
         if (rotation.isActive()) {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.player != null) {
-                client.player.setYaw(rotation.getCurrentYaw());
-                client.player.setPitch(rotation.getCurrentPitch());
-            }
-            rotation.clear();
+            aim.applyAndClear(MinecraftClient.getInstance());
             RotationInterpolator.clearActive();
         }
-        InputUtils.releaseAll();
+        MacroControls.stopAll();
         directStrafeStuckTicks = 0;
     }
 
@@ -487,8 +479,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
         }
 
         // CPS timing
-        long now = System.currentTimeMillis();
-        if (now - lastAttackMs < nextAttackDelayMs) return;
+        if (!attackTimer.ready(nextAttackDelayMs)) return;
 
         // Execute attack
         String mode = attackMode.getValue();
@@ -498,7 +489,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
             executeMageAttack(client);
         }
 
-        lastAttackMs = now;
+        attackTimer.markNow();
         scheduleNextAttackDelay();
     }
 
@@ -532,17 +523,13 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     }
 
     private void releaseAttackState() {
-        InputUtils.releaseAll();
+        MacroControls.stopAll();
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.options != null) {
             client.options.useKey.setPressed(false);
         }
         if (rotation.isActive()) {
-            if (client.player != null) {
-                client.player.setYaw(rotation.getCurrentYaw());
-                client.player.setPitch(rotation.getCurrentPitch());
-            }
-            rotation.clear();
+            aim.applyAndClear(client);
             RotationInterpolator.clearActive();
         }
     }
@@ -582,7 +569,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     }
 
     private void enterHealing(MinecraftClient client) {
-        InputUtils.releaseAll();
+        MacroControls.stopAll();
         state = State.HEALING;
         healTicksRemaining = HEAL_DURATION_TICKS;
         ChatUtils.sendInfoMessage("HP low — healing");
@@ -601,7 +588,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     // ═══════════════════════════════════════════════════ WAITING (Anti-player)
 
     private void tickWaiting(MinecraftClient client) {
-        InputUtils.releaseAll();
+        MacroControls.stopAll();
 
         if (!checkPlayerThreat(client)) {
             waitingTicks++;
@@ -618,7 +605,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     private void enterWaiting() {
         abortPursuit();
         releaseAttackState();
-        InputUtils.releaseAll();
+        MacroControls.stopAll();
         state = State.WAITING;
         waitingTicks = 0;
         ChatUtils.sendWarningMessage("Player detected — pausing");
@@ -627,26 +614,8 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     // ═══════════════════════════════════════════════════ Entity Filtering
 
     private LivingEntity findBestTarget(MinecraftClient client) {
-        double radius = scanRadius.getValue();
-        double radiusSq = radius * radius;
-
-        LivingEntity best = null;
-        double bestDistSq = Double.MAX_VALUE;
-
-        for (Entity entity : client.world.getEntities()) {
-            if (!(entity instanceof LivingEntity living)) continue;
-            if (!passesFilter(client, living)) continue;
-
-            double distSq = living.squaredDistanceTo(client.player.getX(), client.player.getY(), client.player.getZ());
-            if (distSq > radiusSq) continue;
-
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                best = living;
-            }
-        }
-
-        return best;
+        return EntitySearchUtils.closestLiving(client, scanRadius.getValue(), living -> passesFilter(client, living))
+            .orElse(null);
     }
 
     private boolean passesFilter(MinecraftClient client, LivingEntity entity) {
@@ -708,13 +677,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
     }
 
     private String getStrippedName(LivingEntity entity) {
-        if (entity.getCustomName() != null) {
-            return stripFormatting(entity.getCustomName().getString());
-        }
-        if (entity.getDisplayName() != null) {
-            return stripFormatting(entity.getDisplayName().getString());
-        }
-        return "";
+        return EntitySearchUtils.displayName(entity);
     }
 
     private String getSkyblockMobName(MinecraftClient client, LivingEntity entity) {
@@ -723,16 +686,11 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
             return own;
         }
         Box searchBox = entity.getBoundingBox().expand(0.5, 3.0, 0.5);
-        for (Entity nearby : client.world.getOtherEntities(entity, searchBox)) {
-            if (!(nearby instanceof ArmorStandEntity armorStand)) continue;
-            if (!armorStand.isCustomNameVisible()) continue;
-            if (armorStand.getCustomName() == null) continue;
-            String name = stripFormatting(armorStand.getCustomName().getString());
-            if (name.isEmpty()) continue;
-            if (!name.matches(".*[a-zA-Z].*")) continue;
-            return name;
-        }
-        return own;
+        return EntitySearchUtils.closestArmorStandNear(client, entity, searchBox, armorStand ->
+            armorStand.isCustomNameVisible()
+                && armorStand.getCustomName() != null
+                && SkyBlockTextUtils.hasLetters(armorStand.getCustomName().getString())
+        ).map(EntitySearchUtils::displayName).orElse(own);
     }
 
     private static String stripFormatting(String raw) {
@@ -750,7 +708,7 @@ public class CombatMacro extends GoatModule implements MacroHudInfo {
         double safeRadius = playerSafeRadius.getValue();
         double safeRadiusSq = safeRadius * safeRadius;
         long stareThresholdMs = (long) (playerStareSeconds.getValue() * 1000.0);
-        long now = System.currentTimeMillis();
+        long now = threatClock.now();
 
         boolean threatened = false;
         Set<AbstractClientPlayerEntity> activePlayers = new HashSet<>();

@@ -2,6 +2,7 @@ package com.justingoat.goat.client.commands.impl;
 
 import com.justingoat.goat.client.commands.Argument;
 import com.justingoat.goat.client.commands.Command;
+import com.justingoat.goat.client.commands.CommandFeedback;
 import com.justingoat.goat.client.events.EventManager;
 import com.justingoat.goat.client.events.impl.packet.ChatMessageEvent;
 import com.justingoat.goat.client.events.impl.packet.SlotChangePacketEvent;
@@ -11,7 +12,6 @@ import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
-import com.justingoat.goat.client.utils.ChatUtils;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 
@@ -25,35 +25,35 @@ public class FailsafeCommand extends Command {
     @Override
     public void execute(String[] args) {
         if (!FabricLoader.getInstance().isDevelopmentEnvironment()) {
-            ChatUtils.sendErrorMessage("This command is only available in development.");
+            CommandFeedback.error("This command is only available in development.");
             return;
         }
 
         if (args.length == 0) {
-            ChatUtils.sendErrorMessage("Usage: " + getUsage());
+            CommandFeedback.usage(this);
             return;
         }
 
         switch (args[0]) {
             case "reset" -> {
                 FailsafeManager.getInstance().reset();
-                ChatUtils.sendSuccessMessage("Failsafe state reset.");
+                CommandFeedback.success("Failsafe state reset.");
             }
             case "status" -> {
                 FailsafeManager manager = FailsafeManager.getInstance();
                 String active = manager.getActiveFailsafe() == null ? "none" : manager.getActiveFailsafe().getName();
-                ChatUtils.sendInfoMessage("emergency=" + manager.hasEmergency()
+                CommandFeedback.info("emergency=" + manager.hasEmergency()
                     + ", active=" + active
                     + ", reaction=" + manager.isReactionActive());
             }
             case "test" -> {
                 if (args.length < 2) {
-                    ChatUtils.sendErrorMessage("Usage: /goat failsafe test <chat|teleport|velocity|slot|rotation|world>");
+                    CommandFeedback.error("Usage: /goat failsafe test <chat|teleport|velocity|slot|rotation|world>");
                     return;
                 }
                 runTest(args[1]);
             }
-            default -> ChatUtils.sendErrorMessage("Unknown subcommand: " + args[0]);
+            default -> CommandFeedback.error("Unknown subcommand: " + args[0]);
         }
     }
 
@@ -64,7 +64,7 @@ public class FailsafeCommand extends Command {
 
         if ((testName.equals("teleport") || testName.equals("velocity") || testName.equals("rotation"))
                 && client.player == null) {
-            ChatUtils.sendErrorMessage("Join a world before running this failsafe test.");
+            CommandFeedback.error("Join a world before running this failsafe test.");
             return;
         }
 
@@ -98,22 +98,22 @@ public class FailsafeCommand extends Command {
             }
             case "world" -> {
                 if (!manager.triggerDevEmergency("World Change")) {
-                    ChatUtils.sendErrorMessage("World Change failsafe not found.");
+                    CommandFeedback.error("World Change failsafe not found.");
                     return;
                 }
             }
             default -> {
-                ChatUtils.sendErrorMessage("Unknown failsafe test: " + testName);
+                CommandFeedback.error("Unknown failsafe test: " + testName);
                 return;
             }
         }
 
         manager.tick();
         if (!manager.hasEmergency()) {
-            ChatUtils.sendErrorMessage("Failsafe test failed: " + testName + " did not trigger.");
+            CommandFeedback.error("Failsafe test failed: " + testName + " did not trigger.");
         } else {
             String active = manager.getActiveFailsafe() == null ? "unknown" : manager.getActiveFailsafe().getName();
-            ChatUtils.sendSuccessMessage("Failsafe test triggered: " + active);
+            CommandFeedback.success("Failsafe test triggered: " + active);
         }
     }
 

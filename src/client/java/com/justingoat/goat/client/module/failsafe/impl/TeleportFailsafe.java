@@ -5,13 +5,17 @@ import com.justingoat.goat.client.events.impl.packet.TeleportPacketEvent;
 import com.justingoat.goat.client.module.failsafe.Failsafe;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.MacroClock;
 import net.minecraft.item.ItemStack;
 
 public class TeleportFailsafe extends Failsafe {
 
-    private long lastRightClickTime = 0;
-    private long lastCommandTime = 0;
-    private volatile long suppressUntil = 0;
+    private final MacroClock rightClickClock = new MacroClock();
+    private final MacroClock commandClock = new MacroClock();
+    private final MacroClock suppressClock = new MacroClock();
+    private boolean rightClickMarked = false;
+    private boolean commandMarked = false;
+    private volatile boolean suppressing = false;
 
     @Override
     public int getPriority() { return 5; }
@@ -65,7 +69,8 @@ public class TeleportFailsafe extends Failsafe {
     }
 
     public void markRightClick() {
-        lastRightClickTime = System.currentTimeMillis();
+        rightClickClock.mark();
+        rightClickMarked = true;
     }
 
     public void markCommand() {
@@ -73,26 +78,28 @@ public class TeleportFailsafe extends Failsafe {
     }
 
     public void markCommand(long suppressMs) {
-        long now = System.currentTimeMillis();
-        lastCommandTime = now;
-        suppressUntil = Math.max(suppressUntil, now + Math.max(0, suppressMs));
+        commandClock.mark();
+        commandMarked = true;
+        suppressFor(suppressMs);
     }
 
     private boolean shouldSuppress() {
-        long now = System.currentTimeMillis();
-        if (now < suppressUntil) return true;
+        if (suppressing && !suppressClock.ready(0L)) return true;
+        suppressing = false;
 
-        if (now - lastRightClickTime < 1000) {
+        if (rightClickMarked && !rightClickClock.ready(1000L)) {
             if (isHoldingTeleportItem()) {
-                suppressUntil = now + 500;
+                suppressFor(500L);
                 return true;
             }
         }
+        rightClickMarked = false;
 
-        if (now - lastCommandTime < 1000) {
-            suppressUntil = now + 750;
+        if (commandMarked && !commandClock.ready(1000L)) {
+            suppressFor(750L);
             return true;
         }
+        commandMarked = false;
 
         return false;
     }
@@ -107,8 +114,16 @@ public class TeleportFailsafe extends Failsafe {
 
     @Override
     public void reset() {
-        lastRightClickTime = 0;
-        lastCommandTime = 0;
-        suppressUntil = 0;
+        rightClickMarked = false;
+        commandMarked = false;
+        suppressing = false;
+        rightClickClock.resetReady();
+        commandClock.resetReady();
+        suppressClock.resetReady();
+    }
+
+    private void suppressFor(long millis) {
+        suppressClock.delay(millis);
+        suppressing = true;
     }
 }

@@ -3,12 +3,13 @@ package com.justingoat.goat.client.module.failsafe.impl;
 import com.justingoat.goat.client.module.failsafe.Failsafe;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.ConditionTimer;
 import net.minecraft.block.BlockState;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 
 public class DirtFailsafe extends Failsafe {
-    private long firstSeenAt = 0L;
+    private final ConditionTimer seenTimer = new ConditionTimer();
     private BlockPos detectedPos = null;
 
     @Override
@@ -30,13 +31,13 @@ public class DirtFailsafe extends Failsafe {
             return;
         }
 
-        long now = System.currentTimeMillis();
         if (!suspicious.equals(detectedPos)) {
             detectedPos = suspicious;
-            firstSeenAt = now;
+            seenTimer.reset();
+            seenTimer.confirmed(700L);
             return;
         }
-        if (now - firstSeenAt < 700L) return;
+        if (!seenTimer.confirmed(700L)) return;
 
         ChatUtils.sendWarningMessage("Failsafe: suspicious block placed near farm at " + suspicious.toShortString());
         FailsafeManager.getInstance().triggerEmergency(this);
@@ -53,7 +54,7 @@ public class DirtFailsafe extends Failsafe {
     }
 
     private void clear() {
-        firstSeenAt = 0L;
+        seenTimer.reset();
         detectedPos = null;
     }
 

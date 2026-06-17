@@ -4,7 +4,10 @@ import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.pathfinder.EtherwarpPathfinder;
+import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.MacroControls;
+import com.justingoat.goat.client.utils.PathMath;
 import com.justingoat.goat.client.utils.RotationUtils;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -13,7 +16,6 @@ import net.minecraft.registry.Registries;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.text.Text;
 
 import java.util.*;
 
@@ -70,12 +72,13 @@ public class OreMacro extends GoatModule {
             currentIndex = -1;
             miningBot.setCost(buildOreCosts());
             miningBot.setMovement(false);
+            MiningToolUtils.equipMiningToolFromHotbar(MinecraftClient.getInstance());
             message("§a[Goat] OreMacro enabled.");
         } else if (!enabled && wasEnabled) {
             state = OreState.WAITING;
             miningBot.stop();
             etherwarp.cancel();
-            InputUtils.releaseAll();
+            MacroControls.stopAll();
             message("§c[Goat] OreMacro disabled.");
         }
     }
@@ -135,13 +138,13 @@ public class OreMacro extends GoatModule {
         double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
         if (dist <= 0.75) {
-            InputUtils.releaseAll();
+            MacroControls.stopAll();
             advanceToNextNav();
             state = OreState.MINING;
             return;
         }
 
-        float yaw = (float) -(Math.toDegrees(Math.atan2(dx, dz)));
+        float yaw = RotationUtils.lookAt(player.getX(), player.getEyeY(), player.getZ(), point[0] + 0.5, point[1] + 1.0, point[2] + 0.5)[0];
         float yawDelta = MathHelper.wrapDegrees(yaw - player.getYaw());
 
         InputUtils.setForward(true);
@@ -206,10 +209,8 @@ public class OreMacro extends GoatModule {
         int best = navIndices.get(0);
         for (int idx : navIndices) {
             int[] pt = route.get(idx);
-            double dx = pt[0] - player.getX();
-            double dy = pt[1] - player.getY();
-            double dz = pt[2] - player.getZ();
-            double d = dx * dx + dy * dy + dz * dz;
+            double d = PathMath.blockCenterFeet(new BlockPos(pt[0], pt[1], pt[2]))
+                .squaredDistanceTo(player.getX(), player.getY(), player.getZ());
             if (d < closest) { closest = d; best = idx; }
         }
         return best;
@@ -242,7 +243,6 @@ public class OreMacro extends GoatModule {
     }
 
     private void message(String msg) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) client.player.sendMessage(Text.literal(msg), false);
+        ChatUtils.sendRawMessage(msg);
     }
 }

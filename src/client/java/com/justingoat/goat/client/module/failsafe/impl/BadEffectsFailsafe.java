@@ -3,9 +3,10 @@ package com.justingoat.goat.client.module.failsafe.impl;
 import com.justingoat.goat.client.module.failsafe.Failsafe;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.ConditionTimer;
 
 public class BadEffectsFailsafe extends Failsafe {
-    private long firstSeenAt = 0L;
+    private final ConditionTimer seenTimer = new ConditionTimer();
 
     @Override
     public int getPriority() { return 1; }
@@ -16,18 +17,16 @@ public class BadEffectsFailsafe extends Failsafe {
     @Override
     public void onTick() {
         if (!FailsafeDetectionUtils.canCheckMacro()) {
-            firstSeenAt = 0L;
+            seenTimer.reset();
             return;
         }
 
         if (!FailsafeDetectionUtils.hasBadEffect()) {
-            firstSeenAt = 0L;
+            seenTimer.reset();
             return;
         }
 
-        long now = System.currentTimeMillis();
-        if (firstSeenAt == 0L) firstSeenAt = now;
-        if (now - firstSeenAt < 500L) return;
+        if (!seenTimer.confirmed(500L)) return;
 
         ChatUtils.sendWarningMessage("Failsafe: bad status effect detected");
         FailsafeManager.getInstance().triggerEmergency(this);
@@ -35,6 +34,6 @@ public class BadEffectsFailsafe extends Failsafe {
 
     @Override
     public void reset() {
-        firstSeenAt = 0L;
+        seenTimer.reset();
     }
 }

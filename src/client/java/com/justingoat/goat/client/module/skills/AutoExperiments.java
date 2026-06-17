@@ -5,15 +5,17 @@ import com.justingoat.goat.client.module.MacroHudInfo;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.NumberValue;
+import com.justingoat.goat.client.utils.ActionTimer;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.ContainerUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.ItemNameUtils;
+import com.justingoat.goat.client.utils.SkyBlockTextUtils;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
 import net.minecraft.item.ItemStack;
 import net.minecraft.screen.GenericContainerScreenHandler;
-import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 
 import java.util.*;
@@ -51,7 +53,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
     private boolean ultraPatternCaptured = false;
     private int clicks = 0;
     private String lastSlot49Item = null;
-    private long lastClickTime = 0;
+    private final ActionTimer actionTimer = new ActionTimer();
     private boolean reopeningStarted = false;
     private int buyXpTargetLevel = 0;
     private boolean boughtXP = false;
@@ -75,6 +77,11 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
         actionDelay = addNumber("ActionDelay", 500, 75, 1000);
         serumCount = addNumber("SerumCount", 0, 0, 3);
         getMaxXp = addBoolean("GetMaxXP", false);
+    }
+
+    @Override
+    public boolean requiresMovement() {
+        return false;
     }
 
     @Override
@@ -144,7 +151,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
 
         if (newState == state) return;
         state = newState;
-        lastClickTime = System.currentTimeMillis();
+        actionTimer.markNow();
 
         switch (newState) {
             case CHRONOMATRON -> {
@@ -166,8 +173,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
             default -> {}
         }
     }
-
-    // ═══════════════════════════════════════════════════ DECIDING
+    // DECIDING
 
     private void handleDeciding(GenericContainerScreenHandler handler, String containerName) {
         if (!canClick()) return;
@@ -214,8 +220,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
 
         clickSlot(handler, SLOT_SUPERPAIRS);
     }
-
-    // ═══════════════════════════════════════════════════ ULTRASEQUENCER
+    // ULTRASEQUENCER
 
     private void handleUltrasequencer(GenericContainerScreenHandler handler) {
         int maxDepth;
@@ -245,8 +250,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
 
         lastSlot49Item = control.name;
     }
-
-    // ═══════════════════════════════════════════════════ CHRONOMATRON
+    // CHRONOMATRON
 
     private void handleChronomatron(GenericContainerScreenHandler handler) {
         int maxDepth;
@@ -284,8 +288,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
 
         lastSlot49Item = control.name;
     }
-
-    // ═══════════════════════════════════════════════════ SUPERPAIRS
+    // SUPERPAIRS
 
     private void handleSuperpairs(GenericContainerScreenHandler handler) {
         if (!superpairsInitialized) {
@@ -334,8 +337,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
             startReopenSequence();
         }
     }
-
-    // ═══════════════════════════════════════════════════ SUPERPAIRS REWARDS
+    // SUPERPAIRS REWARDS
 
     private void handleSuperpairsRewards(GenericContainerScreenHandler handler) {
         if (superpairsRewardsClaimed) {
@@ -354,8 +356,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
             superpairsRewardsClaimed = true;
         }
     }
-
-    // ═══════════════════════════════════════════════════ BUYING XP
+    // BUYING XP
 
     private void handleBuyingXp(GenericContainerScreenHandler handler) {
         if (buyXpTargetLevel == 0) return;
@@ -399,13 +400,12 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
             }
         }
     }
-
-    // ═══════════════════════════════════════════════════ REOPENING
+    // REOPENING
 
     private void startReopenSequence() {
         reopeningStarted = false;
         reopenUseTicks = 0;
-        lastClickTime = System.currentTimeMillis();
+        actionTimer.markNow();
         state = State.REOPENING;
     }
 
@@ -415,7 +415,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
         if (!reopeningStarted) {
             if (client.player != null) client.player.closeHandledScreen();
             reopeningStarted = true;
-            lastClickTime = System.currentTimeMillis();
+            actionTimer.markNow();
         } else {
             ChatUtils.sendInfoMessage("[Experiments] Reopening table...");
             InputUtils.setUse(true);
@@ -425,11 +425,10 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
             ultraPatternCaptured = false;
             clicks = 0;
             lastSlot49Item = null;
-            lastClickTime = System.currentTimeMillis();
+            actionTimer.markNow();
         }
     }
-
-    // ═══════════════════════════════════════════════════ Stake selection
+    // Stake selection
 
     private void selectHighestStake(GenericContainerScreenHandler handler, int[] slots) {
         for (int slot : slots) {
@@ -575,8 +574,8 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
 
     private String getSuperpairsFingerprint(ItemStack stack) {
         if (stack.isEmpty()) return null;
-        String name = Formatting.strip(stack.getName().getString());
-        if (name == null || isHiddenSuperpairsCard(name)) return null;
+        String name = ItemNameUtils.getStrippedName(stack);
+        if (name.isEmpty() || isHiddenSuperpairsCard(name)) return null;
 
         String lore = getLoreString(stack).toLowerCase(Locale.ROOT);
         if (lore.contains("click any") || lore.contains("click to reveal")) return null;
@@ -600,16 +599,10 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
     }
 
     private Integer findClaimSlot(GenericContainerScreenHandler handler) {
-        int maxSlot = Math.min(54, handler.slots.size());
-        for (int slot = 0; slot < maxSlot; slot++) {
-            ItemStack stack = getStack(handler, slot);
-            if (stack.isEmpty()) continue;
-            String text = (stack.getName().getString() + " " + getLoreString(stack)).toLowerCase(Locale.ROOT);
-            if (text.contains("click to claim") || text.contains("claim rewards") || text.contains("click to continue")) {
-                return slot;
-            }
-        }
-        return null;
+        return ContainerUtils.findSlot(handler, stack -> {
+            String text = (ItemNameUtils.getStrippedName(stack) + " " + getLoreString(stack)).toLowerCase(Locale.ROOT);
+            return text.contains("click to claim") || text.contains("claim rewards") || text.contains("click to continue");
+        });
     }
 
     private void resetSuperpairs() {
@@ -628,14 +621,13 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
         lastSuperpairsClickedSlot = -1;
         superpairsInitialized = !superpairsBoardSlots.isEmpty();
     }
-
-    // ═══════════════════════════════════════════════════ Renew
+    // Renew
 
     private boolean renewRequired(GenericContainerScreenHandler handler) {
         ItemStack item = getStack(handler, SLOT_RENEW);
         if (item.isEmpty()) return false;
-        String name = Formatting.strip(item.getName().getString());
-        return name != null && name.contains("Renew Experiments");
+        String name = ItemNameUtils.getStrippedName(item);
+        return name.contains("Renew Experiments");
     }
 
     private void renewExperiments(GenericContainerScreenHandler handler) {
@@ -654,15 +646,14 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
             }
         }
     }
-
-    // ═══════════════════════════════════════════════════ Control state
+    // Control state
 
     private ControlState getControlState(GenericContainerScreenHandler handler) {
         ItemStack item = getStack(handler, SLOT_CONTROL);
         if (item.isEmpty()) return null;
 
-        String name = Formatting.strip(item.getName().getString());
-        if (name == null) return null;
+        String name = ItemNameUtils.getStrippedName(item);
+        if (name.isEmpty()) return null;
 
         return new ControlState(
             name,
@@ -671,8 +662,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
             lastSlot49Item != null && lastSlot49Item.startsWith("Timer:")
         );
     }
-
-    // ═══════════════════════════════════════════════════ Ultrasequencer pattern
+    // Ultrasequencer pattern
 
     private void captureUltrasequencerOrder(GenericContainerScreenHandler handler) {
         ultrasequencerOrder.clear();
@@ -683,16 +673,15 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
             }
         }
     }
-
-    // ═══════════════════════════════════════════════════ Chronomatron round
+    // Chronomatron round
 
     private Integer getChronomatronRound(GenericContainerScreenHandler handler) {
         ItemStack item = getStack(handler, 4);
         if (item.isEmpty()) return null;
-        String name = Formatting.strip(item.getName().getString());
-        if (name == null) return null;
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("Round:\\s*(\\d+)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(name);
-        return m.find() ? Integer.parseInt(m.group(1)) : null;
+        String name = ItemNameUtils.getStrippedName(item);
+        if (name.isEmpty()) return null;
+        if (!SkyBlockTextUtils.normalize(name).startsWith("round:")) return null;
+        return SkyBlockTextUtils.firstInteger(name).stream().boxed().findFirst().orElse(null);
     }
 
     private int findChronomatronGlowSlot(GenericContainerScreenHandler handler) {
@@ -711,7 +700,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
     }
 
     private boolean hasPurchaseFailure(ItemStack stack) {
-        String text = (stack.getName().getString() + " " + getLoreString(stack)).toLowerCase(Locale.ROOT);
+        String text = (ItemNameUtils.getStrippedName(stack) + " " + getLoreString(stack)).toLowerCase(Locale.ROOT);
         return text.contains("not enough")
             || text.contains("cannot afford")
             || text.contains("insufficient")
@@ -741,37 +730,32 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
             InputUtils.setUse(false);
             if (state == State.REOPENING) {
                 reopeningStarted = false;
-                lastClickTime = System.currentTimeMillis();
+                actionTimer.markNow();
                 state = State.WAITING;
             }
         }
     }
-
-    // ═══════════════════════════════════════════════════ Slot click
+    // Slot click
 
     private boolean clickSlot(GenericContainerScreenHandler handler, int slot) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.interactionManager == null || client.player == null) return false;
-        client.interactionManager.clickSlot(handler.syncId, slot, 0, SlotActionType.PICKUP, client.player);
-        lastClickTime = System.currentTimeMillis();
+        if (!ContainerUtils.clickSlot(handler, slot)) return false;
+        actionTimer.markNow();
         return true;
     }
 
     private boolean canClick() {
-        return System.currentTimeMillis() - lastClickTime >= (long) actionDelay.getValue();
+        return actionTimer.ready((long) actionDelay.getValue());
     }
-
-    // ═══════════════════════════════════════════════════ Item helpers
+    // Item helpers
 
     private ItemStack getStack(GenericContainerScreenHandler handler, int slot) {
-        if (slot < 0 || slot >= handler.slots.size()) return ItemStack.EMPTY;
-        return handler.slots.get(slot).getStack();
+        return ContainerUtils.getStack(handler, slot);
     }
 
     private boolean isDye(ItemStack stack) {
         if (stack.isEmpty()) return false;
-        String name = Formatting.strip(stack.getName().getString());
-        return name != null && name.matches("^\\d+$");
+        String name = ItemNameUtils.getStrippedName(stack);
+        return name.matches("^\\d+$");
     }
 
     private boolean isLocked(ItemStack stack) {
@@ -791,45 +775,40 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
 
     private int extractStakeCost(ItemStack stack) {
         for (String line : getLoreLines(stack)) {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("Starting\\s+cost:\\s*(\\d+)\\s*XP\\s*Levels?", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(line);
-            if (m.find()) return Integer.parseInt(m.group(1));
+            String lower = SkyBlockTextUtils.normalize(line);
+            if (lower.contains("starting cost") && lower.contains("xp level")) {
+                return SkyBlockTextUtils.firstInteger(line).orElse(0);
+            }
         }
         return 0;
     }
 
     private int extractRenewCost(ItemStack stack) {
         for (String line : getLoreLines(stack)) {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)\\s*XP\\s*Levels?", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(line);
-            if (m.find()) return Integer.parseInt(m.group(1));
+            if (SkyBlockTextUtils.normalize(line).contains("xp level")) {
+                return SkyBlockTextUtils.firstInteger(line).orElse(0);
+            }
         }
         return 0;
     }
 
     private int extractXpLevel(ItemStack stack) {
         for (String line : getLoreLines(stack)) {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("Your\\s+Exp\\s+Level:\\s*(\\d+)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(line);
-            if (m.find()) return Integer.parseInt(m.group(1));
+            if (SkyBlockTextUtils.normalize(line).contains("your exp level")) {
+                return SkyBlockTextUtils.firstInteger(line).orElse(0);
+            }
         }
         return 0;
     }
 
     private List<String> getLoreLines(ItemStack stack) {
-        if (stack.isEmpty()) return Collections.emptyList();
-        List<String> result = new ArrayList<>();
-        List<Text> tooltip = stack.getTooltip(net.minecraft.item.Item.TooltipContext.DEFAULT, null, net.minecraft.item.tooltip.TooltipType.BASIC);
-        for (int i = 1; i < tooltip.size(); i++) {
-            String line = Formatting.strip(tooltip.get(i).getString());
-            if (line != null) result.add(line);
-        }
-        return result;
+        return ContainerUtils.getLoreLines(stack);
     }
 
     private String getLoreString(ItemStack stack) {
-        List<String> lines = getLoreLines(stack);
-        return String.join(" ", lines);
+        return ContainerUtils.getLoreString(stack);
     }
-
-    // ═══════════════════════════════════════════════════ Reset
+    // Reset
 
     private void reset() {
         ultrasequencerOrder.clear();
@@ -837,7 +816,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
         ultraPatternCaptured = false;
         clicks = 0;
         lastSlot49Item = null;
-        lastClickTime = System.currentTimeMillis();
+        actionTimer.markNow();
         buyXpTargetLevel = 0;
         boughtXP = false;
         resetXpBuyingProgress();
@@ -851,8 +830,7 @@ public class AutoExperiments extends GoatModule implements MacroHudInfo {
         resetSuperpairs();
         InputUtils.setUse(false);
     }
-
-    // ═══════════════════════════════════════════════════ HUD
+    // HUD
 
     @Override
     public String getHudName() {

@@ -2,10 +2,10 @@ package com.justingoat.goat.client.commands.impl;
 
 import com.justingoat.goat.client.commands.Argument;
 import com.justingoat.goat.client.commands.Command;
+import com.justingoat.goat.client.commands.CommandFeedback;
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.movement.PathfinderTest;
-import com.justingoat.goat.client.utils.ChatUtils;
 import net.minecraft.util.math.BlockPos;
 
 import java.util.List;
@@ -18,7 +18,7 @@ public class GotoCommand extends Command {
     @Override
     public void execute(String[] args) {
         if (args.length != 3) {
-            ChatUtils.sendErrorMessage("Usage: " + getUsage());
+            CommandFeedback.usage(this);
             return;
         }
 
@@ -30,9 +30,9 @@ public class GotoCommand extends Command {
         GoatModule module = ModuleManager.findByName("Pathfinder");
         if (module instanceof PathfinderTest pt) {
             pt.pathTargetWalk(target);
-            ChatUtils.sendSuccessMessage("Pathing to " + x + " " + y + " " + z);
+            CommandFeedback.pathing("Pathing to", target);
         } else {
-            ChatUtils.sendErrorMessage("Pathfinder module not found.");
+            CommandFeedback.moduleNotFound("Pathfinder");
         }
     }
 

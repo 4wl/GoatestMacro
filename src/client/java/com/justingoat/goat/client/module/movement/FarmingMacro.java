@@ -14,18 +14,23 @@ import com.justingoat.goat.client.events.impl.packet.ChatMessageEvent;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.module.failsafe.impl.TeleportFailsafe;
 import com.justingoat.goat.client.module.farming.PestCleaner;
+import com.justingoat.goat.client.utils.AntiStuckController;
 import com.justingoat.goat.client.utils.BPSTracker;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.CommandUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.InventoryUtils;
 import com.justingoat.goat.client.utils.LagDetector;
 import com.justingoat.goat.client.utils.RotationUtils;
+import com.justingoat.goat.client.utils.SkyBlockToolUtils;
+import com.justingoat.goat.client.utils.ToolSelector;
 import com.justingoat.goat.client.utils.SkyBlockUtils;
+import com.justingoat.goat.client.utils.WorldUtils;
 
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
 import net.minecraft.state.property.IntProperty;
@@ -35,7 +40,6 @@ import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 
@@ -184,7 +188,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             stopServerRecovery();
             resetCropGuard();
             resetAntiStuck();
-            InputUtils.releaseAll();
+            releaseInputs();
             EventManager.INSTANCE.unregister(this);
             ChatUtils.sendWarningMessage("FarmingMacro disabled");
         }
@@ -229,26 +233,12 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         int slot = findBestHoeSlot(client);
         if (slot == -1) return;
 
-        client.player.getInventory().setSelectedSlot(slot);
+        InventoryUtils.equipHotbarSlot(client, slot);
         debugMsg("Equipped hoe in slot " + (slot + 1));
     }
 
     private int findBestHoeSlot(MinecraftClient client) {
-        Item[] priority = {
-            Items.DIAMOND_HOE,
-            Items.GOLDEN_HOE,
-            Items.IRON_HOE
-        };
-
-        for (Item target : priority) {
-            for (int slot = 0; slot < 9; slot++) {
-                ItemStack stack = client.player.getInventory().getStack(slot);
-                if (!stack.isEmpty() && stack.isOf(target)) {
-                    return slot;
-                }
-            }
-        }
-        return -1;
+        return ToolSelector.findBest(client, ToolSelector.Category.FARMING_HOE);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -408,9 +398,9 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
 
         String tool = CROP_TOOLS.get(block.registryId);
         if (tool != null) {
-            int slot = findItemInHotbar(client, tool);
+            int slot = InventoryUtils.findHotbarSlotByName(client, tool);
             if (slot != -1) {
-                client.player.getInventory().setSelectedSlot(slot);
+                InventoryUtils.equipHotbarSlot(client, slot);
                 debugMsg("Equipped " + tool);
             }
         }
@@ -940,7 +930,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         if (now < nextServerRecoveryCommandAt) return;
 
         markWarpCommand();
-        client.player.networkHandler.sendChatCommand(command);
+        CommandUtils.send(client, command);
         nextServerRecoveryCommandAt = now + retryMs;
         debugMsg("Server recovery command: /" + command + " (" + serverRecoveryReason + ")");
     }
@@ -1084,7 +1074,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
 
         if (System.currentTimeMillis() >= warpDelay) {
             markWarpCommand();
-            client.player.networkHandler.sendChatCommand("warp garden");
+            CommandUtils.warpGarden(client);
             warpDelay = System.currentTimeMillis() + 5000;
         }
     }
@@ -1125,7 +1115,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             } else {
                 ChatUtils.sendWarningMessage("Not near crop! Warping...");
                 markWarpCommand();
-                client.player.networkHandler.sendChatCommand("warp garden");
+                CommandUtils.warpGarden(client);
                 warping = true;
             }
             return;
@@ -1411,7 +1401,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         if (antiStuckNudgeTicks > 0) {
             antiStuckNudgeTicks--;
             float escapeYaw = antiStuckEscapeYaw != null ? antiStuckEscapeYaw : preferredYaw + 180.0f;
-            applyAntiStuckMovement(client, escapeYaw);
+            AntiStuckController.applyMovement(client, escapeYaw);
             InputUtils.setSprint(false);
             InputUtils.setJump(true);
             InputUtils.setSneak(false);
@@ -1453,7 +1443,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
 
         if (antiStuckAttempts < ANTI_STUCK_MAX_NUDGES) {
             antiStuckAttempts++;
-            antiStuckEscapeYaw = chooseAntiStuckEscapeYaw(client, preferredYaw);
+            antiStuckEscapeYaw = AntiStuckController.chooseEscapeYaw(client, preferredYaw, ANTI_STUCK_ESCAPE_CHECK_DISTANCE);
             antiStuckNudgeTicks = ANTI_STUCK_NUDGE_TICKS;
             debugMsg("Anti-stuck nudge: " + reason);
             return true;
@@ -1487,114 +1477,12 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
         }
     }
 
-    private float chooseAntiStuckEscapeYaw(MinecraftClient client, float preferredYaw) {
-        BlockPos intersecting = findIntersectingBlock(client);
-        if (intersecting != null) {
-            Direction side = findClosestClearSide(client, intersecting);
-            if (side != null) {
-                Vec3d escape = Vec3d.ofCenter(intersecting).add(
-                    side.getOffsetX() * ANTI_STUCK_ESCAPE_CHECK_DISTANCE,
-                    0.0,
-                    side.getOffsetZ() * ANTI_STUCK_ESCAPE_CHECK_DISTANCE
-                );
-                return angleToPoint(client, escape.x, escape.z);
-            }
-        }
-
-        float bestYaw = MathHelper.wrapDegrees(preferredYaw + 180.0f);
-        float bestScore = Float.MAX_VALUE;
-        for (int offset = 0; offset < 360; offset += 20) {
-            float yaw = MathHelper.wrapDegrees(preferredYaw + offset);
-            if (!isEscapeDirectionClear(client, yaw)) continue;
-
-            float score = Math.abs(MathHelper.wrapDegrees(yaw - preferredYaw));
-            if (score < bestScore) {
-                bestScore = score;
-                bestYaw = yaw;
-            }
-        }
-        return bestYaw;
-    }
-
-    private void applyAntiStuckMovement(MinecraftClient client, float desiredYaw) {
-        float relYaw = MathHelper.wrapDegrees(desiredYaw - client.player.getYaw());
-
-        boolean forward = relYaw >= -67.5f && relYaw < 67.5f;
-        boolean left = relYaw >= 22.5f && relYaw < 157.5f;
-        boolean back = relYaw >= 112.5f || relYaw < -112.5f;
-        boolean right = relYaw >= -157.5f && relYaw < -22.5f;
-
-        InputUtils.setForward(forward);
-        InputUtils.setBack(back);
-        InputUtils.setLeft(left);
-        InputUtils.setRight(right);
-    }
-
-    private BlockPos findIntersectingBlock(MinecraftClient client) {
-        if (client.player == null || client.world == null) return null;
-
-        Box playerBox = client.player.getBoundingBox().expand(0.02, 0.0, 0.02);
-        BlockPos playerBlock = client.player.getBlockPos();
-        BlockPos best = null;
-        double bestDistSq = Double.MAX_VALUE;
-
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dy = 0; dy <= 1; dy++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    BlockPos pos = playerBlock.add(dx, dy, dz);
-                    if (isPassable(client, pos)) continue;
-
-                    Box blockBox = new Box(pos);
-                    if (!playerBox.intersects(blockBox)) continue;
-
-                    double distSq = Vec3d.ofCenter(pos).squaredDistanceTo(playerPos(client));
-                    if (distSq < bestDistSq) {
-                        bestDistSq = distSq;
-                        best = pos;
-                    }
-                }
-            }
-        }
-        return best;
-    }
-
-    private Direction findClosestClearSide(MinecraftClient client, BlockPos pos) {
-        Direction best = null;
-        double bestDistSq = Double.MAX_VALUE;
-
-        for (Direction direction : Direction.Type.HORIZONTAL) {
-            BlockPos adjacent = pos.offset(direction);
-            if (!isPassable(client, adjacent) || !isPassable(client, adjacent.up())) continue;
-
-            Vec3d side = Vec3d.ofCenter(pos).add(direction.getOffsetX() * 0.5, 0.0, direction.getOffsetZ() * 0.5);
-            double distSq = side.squaredDistanceTo(playerPos(client));
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                best = direction;
-            }
-        }
-        return best;
-    }
-
-    private boolean isEscapeDirectionClear(MinecraftClient client, float yaw) {
-        Vec3d pos = playerPos(client);
-        double radians = Math.toRadians(yaw);
-        double dx = -Math.sin(radians) * ANTI_STUCK_ESCAPE_CHECK_DISTANCE;
-        double dz = Math.cos(radians) * ANTI_STUCK_ESCAPE_CHECK_DISTANCE;
-
-        BlockPos feet = BlockPos.ofFloored(pos.x + dx, pos.y + 0.1, pos.z + dz);
-        BlockPos body = BlockPos.ofFloored(pos.x + dx, pos.y + 0.9, pos.z + dz);
-        BlockPos head = BlockPos.ofFloored(pos.x + dx, pos.y + 1.8, pos.z + dz);
-        return isPassable(client, feet) && isPassable(client, body) && isPassable(client, head);
-    }
-
     private boolean isPassable(MinecraftClient client, BlockPos pos) {
-        if (client.world == null) return true;
-        return client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty();
+        return WorldUtils.isPassable(client, pos);
     }
 
     private Vec3d playerPos(MinecraftClient client) {
-        return new Vec3d(client.player.getX(), client.player.getY(), client.player.getZ());
+        return WorldUtils.playerPos(client);
     }
 
     private float snapYaw(float yaw) {
@@ -1603,42 +1491,25 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
     }
 
     private float angleToBlock(MinecraftClient client, BlockPos pos) {
-        return angleToPoint(client, pos.getX() + 0.5, pos.getZ() + 0.5);
+        return WorldUtils.yawToBlockCenter(client, pos);
     }
 
     private float angleToPoint(MinecraftClient client, double x, double z) {
-        double dx = x - client.player.getX();
-        double dz = z - client.player.getZ();
-        return (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
+        return WorldUtils.yawToPoint(client, x, z);
     }
 
     private boolean isAtPoint(MinecraftClient client, BlockPos point, double minDist) {
-        double dx = client.player.getX() - (point.getX() + 0.5);
-        double dy = client.player.getY() - point.getY();
-        double dz = client.player.getZ() - (point.getZ() + 0.5);
-        return Math.sqrt(dx * dx + dy * dy + dz * dz) < minDist;
+        return WorldUtils.isAtPoint(client, point, minDist);
     }
 
     private boolean isHorizontallyAtPoint(MinecraftClient client, BlockPos point, double minDist) {
-        double dx = client.player.getX() - (point.getX() + 0.5);
-        double dz = client.player.getZ() - (point.getZ() + 0.5);
-        return Math.sqrt(dx * dx + dz * dz) < minDist;
+        return WorldUtils.isHorizontallyAtPoint(client, point, minDist);
     }
 
     private boolean areChunksLoaded(MinecraftClient client, BlockPos pos) {
         int chunkX = pos.getX() >> 4;
         int chunkZ = pos.getZ() >> 4;
         return client.world.getChunkManager().isChunkLoaded(chunkX, chunkZ);
-    }
-
-    private int findItemInHotbar(MinecraftClient client, String name) {
-        for (int i = 0; i < 9; i++) {
-            var stack = client.player.getInventory().getStack(i);
-            if (!stack.isEmpty() && stack.getName().getString().contains(name)) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     private void debugMsg(String msg) {
@@ -1669,7 +1540,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             } else {
                 markWarpCommand();
                 ChatUtils.sendInfoMessage("Rewarp trigger reached, warping...");
-                client.player.networkHandler.sendChatCommand("warp garden");
+                CommandUtils.warpGarden(client);
                 state = State.REWARP;
             }
         }
@@ -1688,7 +1559,7 @@ public class FarmingMacro extends GoatModule implements MacroHudInfo {
             debugMsg("PestCleaner finished, rewarping...");
             ChatUtils.sendInfoMessage("Pest cleaning done, warping...");
             markWarpCommand();
-            client.player.networkHandler.sendChatCommand("warp garden");
+            CommandUtils.warpGarden(client);
             state = State.REWARP;
         }
     }

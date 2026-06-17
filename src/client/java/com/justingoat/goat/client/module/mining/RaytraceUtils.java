@@ -1,6 +1,7 @@
 package com.justingoat.goat.client.module.mining;
 
 import net.minecraft.block.BlockState;
+import com.justingoat.goat.client.utils.BlockScanner;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
@@ -41,8 +42,7 @@ public final class RaytraceUtils {
                     continue;
                 }
 
-                BlockState state = world.getBlockState(new BlockPos(bx, by, bz));
-                if (!state.isAir() && !state.getCollisionShape(world, new BlockPos(bx, by, bz)).isEmpty()) {
+                if (BlockScanner.isSolid(world, new BlockPos(bx, by, bz))) {
                     return false;
                 }
             }

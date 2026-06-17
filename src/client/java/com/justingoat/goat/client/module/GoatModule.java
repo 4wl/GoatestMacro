@@ -10,6 +10,8 @@ import com.justingoat.goat.client.module.value.KeybindValue;
 import com.justingoat.goat.client.module.value.ModeValue;
 import com.justingoat.goat.client.module.value.ModuleValue;
 import com.justingoat.goat.client.module.value.NumberValue;
+import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.MacroControls;
 
 import net.minecraft.client.MinecraftClient;
 
@@ -75,6 +77,10 @@ public class GoatModule {
         return enabledAtMillis == 0 ? 0 : System.currentTimeMillis() - enabledAtMillis;
     }
 
+    public boolean requiresMovement() {
+        return true;
+    }
+
     public List<ModuleValue> getValues() {
         return Collections.unmodifiableList(values);
     }
@@ -101,5 +107,29 @@ public class GoatModule {
         KeybindValue moduleValue = new KeybindValue(name, keyCode);
         values.add(moduleValue);
         return moduleValue;
+    }
+
+    protected void releaseInputs() {
+        MacroControls.stopAll();
+    }
+
+    protected void sendEnabledMessage() {
+        ChatUtils.moduleSuccess(name, "enabled.");
+    }
+
+    protected void sendDisabledMessage() {
+        ChatUtils.moduleWarning(name, "disabled.");
+    }
+
+    protected void sendModuleInfo(String message) {
+        ChatUtils.moduleInfo(name, message);
+    }
+
+    protected void sendModuleWarning(String message) {
+        ChatUtils.moduleWarning(name, message);
+    }
+
+    protected void sendModuleError(String message) {
+        ChatUtils.moduleError(name, message);
     }
 }

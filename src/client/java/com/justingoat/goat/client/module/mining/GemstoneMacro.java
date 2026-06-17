@@ -4,12 +4,14 @@ import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.pathfinder.EtherwarpPathfinder;
+import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.MacroControls;
+import com.justingoat.goat.client.utils.PathMath;
 import com.justingoat.goat.client.utils.RotationUtils;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.text.Text;
 
 import java.util.*;
 
@@ -60,12 +62,13 @@ public class GemstoneMacro extends GoatModule {
             state = GemState.DECIDING;
             currentPointIndex = -1;
             scanned = false;
+            MiningToolUtils.equipMiningToolFromHotbar(MinecraftClient.getInstance());
             message("§a[Goat] GemstoneMacro enabled.");
         } else if (!enabled && wasEnabled) {
             state = GemState.WAITING;
             miningBot.stop();
             etherwarp.cancel();
-            InputUtils.releaseAll();
+            MacroControls.stopAll();
             scanned = false;
             message("§c[Goat] GemstoneMacro disabled.");
         }
@@ -146,10 +149,8 @@ public class GemstoneMacro extends GoatModule {
         int best = 0;
         for (int i = 0; i < route.size(); i++) {
             int[] pt = route.get(i);
-            double dx = pt[0] - player.getX();
-            double dy = pt[1] - player.getY();
-            double dz = pt[2] - player.getZ();
-            double d = dx * dx + dy * dy + dz * dz;
+            double d = PathMath.blockCenterFeet(new BlockPos(pt[0], pt[1], pt[2]))
+                .squaredDistanceTo(player.getX(), player.getY(), player.getZ());
             if (d < closest) { closest = d; best = i; }
         }
         return best;
@@ -189,7 +190,6 @@ public class GemstoneMacro extends GoatModule {
     }
 
     private void message(String msg) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) client.player.sendMessage(Text.literal(msg), false);
+        ChatUtils.sendRawMessage(msg);
     }
 }

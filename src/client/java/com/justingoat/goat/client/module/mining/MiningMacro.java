@@ -4,10 +4,10 @@ import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.ModeValue;
-import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.MacroControls;
 import com.justingoat.goat.client.utils.RotationUtils;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.text.Text;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -48,10 +48,12 @@ public class MiningMacro extends GoatModule {
             miningBot.setPrioritizeTitanium(prioritizeTitanium.getValue());
             miningBot.setPrioritizeGrayMithril(prioritizeGrayMithril.getValue());
             updateCostMap();
+            MiningToolUtils.equipMiningToolFromHotbar(MinecraftClient.getInstance());
             miningBot.setEnabled(true);
             message("§a[Goat] MiningBot enabled.");
         } else if (!enabled && wasEnabled) {
             miningBot.stop();
+            MacroControls.stopAll();
             message("§c[Goat] MiningBot disabled.");
         }
     }
@@ -89,9 +91,6 @@ public class MiningMacro extends GoatModule {
     }
 
     private void message(String msg) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) {
-            client.player.sendMessage(Text.literal(msg), false);
-        }
+        ChatUtils.sendRawMessage(msg);
     }
 }

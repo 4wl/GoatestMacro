@@ -1,13 +1,16 @@
 package com.justingoat.goat.client.module.pathfinder;
 
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.PathMath;
 import com.justingoat.goat.client.utils.SkyBlockUtils;
+import com.justingoat.goat.client.utils.SkyBlockToolUtils;
+import com.justingoat.goat.client.utils.TickTimer;
+import com.justingoat.goat.client.utils.WorldUtils;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.SnowBlock;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.item.ItemStack;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
@@ -26,8 +29,8 @@ public class PathAote {
     private static final int COOLDOWN_TICKS = 12;
     private static final int JUMP_SUPPRESS_TICKS = 5;
 
-    private int cooldownTicks = 0;
-    private int jumpSuppressTicks = 0;
+    private final TickTimer cooldown = new TickTimer();
+    private final TickTimer jumpSuppress = new TickTimer();
     private int originalSlot = -1;
     private boolean swapped = false;
     private boolean useKeyDown = false;
@@ -37,15 +40,15 @@ public class PathAote {
 
         ClientPlayerEntity player = client.player;
 
-        if (jumpSuppressTicks > 0) jumpSuppressTicks--;
+        jumpSuppress.tick();
 
         if (useKeyDown) {
             InputUtils.setUse(false);
             useKeyDown = false;
         }
 
-        if (cooldownTicks > 0) {
-            cooldownTicks--;
+        if (cooldown.active()) {
+            cooldown.tick();
             return false;
         }
 
@@ -62,7 +65,7 @@ public class PathAote {
             return false;
         }
 
-        int slot = findAoteSlot(player);
+        int slot = SkyBlockToolUtils.findAoteOrAotvSlot(player);
         if (slot < 0) return false;
 
         double advanceDist = getAdvanceDistance(path, currentIndex, playerPos);
@@ -78,36 +81,24 @@ public class PathAote {
         ensureHeld(player, slot);
         InputUtils.setUse(true);
         useKeyDown = true;
-        cooldownTicks = COOLDOWN_TICKS;
-        jumpSuppressTicks = JUMP_SUPPRESS_TICKS;
+        cooldown.set(COOLDOWN_TICKS);
+        jumpSuppress.set(JUMP_SUPPRESS_TICKS);
         return true;
     }
 
     public boolean shouldSuppressJump() {
-        return jumpSuppressTicks > 0;
+        return jumpSuppress.active();
     }
 
     public void stop() {
-        cooldownTicks = 0;
-        jumpSuppressTicks = 0;
+        cooldown.reset();
+        jumpSuppress.reset();
         if (useKeyDown) {
             InputUtils.setUse(false);
             useKeyDown = false;
         }
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player != null) restoreSlot(client.player);
-    }
-
-    private int findAoteSlot(ClientPlayerEntity player) {
-        for (int i = 0; i < 9; i++) {
-            ItemStack stack = player.getInventory().getStack(i);
-            if (stack.isEmpty()) continue;
-            String name = stack.getName().getString();
-            if (name.contains("Aspect of the Void") || name.contains("Aspect of the End")) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     private void ensureHeld(ClientPlayerEntity player, int slot) {
@@ -173,7 +164,10 @@ public class PathAote {
         double dx = target.x - player.getX();
         double dz = target.z - player.getZ();
         if (dx * dx + dz * dz < 0.001) return true;
-        float targetYaw = (float) -(Math.toDegrees(Math.atan2(dx, dz)));
+        float targetYaw = WorldUtils.yawTo(
+                new Vec3d(player.getX(), player.getY(), player.getZ()),
+                new Vec3d(target.x, player.getY(), target.z)
+        );
         return Math.abs(MathHelper.wrapDegrees(targetYaw - currentYaw)) <= MAX_AIM_YAW_ERROR;
     }
 
@@ -215,7 +209,7 @@ public class PathAote {
         if (path.size() < 2) return 0;
         double total = 0;
         for (int i = 1; i < path.size(); i++) {
-            total += nodeCenter(path.get(i - 1)).distanceTo(nodeCenter(path.get(i)));
+            total += PathMath.distance(nodeCenter(path.get(i - 1)), nodeCenter(path.get(i)));
         }
         return total;
     }

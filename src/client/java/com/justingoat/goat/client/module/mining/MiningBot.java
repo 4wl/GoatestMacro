@@ -1,8 +1,10 @@
 package com.justingoat.goat.client.module.mining;
 
 import com.justingoat.goat.client.utils.InputUtils;
-import com.justingoat.goat.client.utils.RotationInterpolator;
+import com.justingoat.goat.client.utils.BlockScanner;
 import com.justingoat.goat.client.utils.RotationUtils;
+import com.justingoat.goat.client.utils.RotationInterpolator;
+import com.justingoat.goat.client.utils.WorldUtils;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -395,13 +397,8 @@ public class MiningBot {
     private void rotateToTarget(ClientPlayerEntity player) {
         if (currentTarget == null || rotationHelper == null) return;
         Vec3d eye = player.getEyePos();
-        double dx = currentTarget.aimX - eye.x;
-        double dy = currentTarget.aimY - eye.y;
-        double dz = currentTarget.aimZ - eye.z;
-        double horizDist = Math.sqrt(dx * dx + dz * dz);
-        float yaw = (float) -(Math.toDegrees(Math.atan2(dx, dz)));
-        float pitch = (float) -(Math.toDegrees(Math.atan2(dy, horizDist)));
-        rotationHelper.setTarget(yaw, pitch);
+        float[] look = RotationUtils.lookAt(eye.x, eye.y, eye.z, currentTarget.aimX, currentTarget.aimY, currentTarget.aimZ);
+        rotationHelper.setTarget(look[0], look[1]);
         rotationHelper.tick();
     }
 
@@ -431,7 +428,8 @@ public class MiningBot {
         double dy = currentTarget.aimY - player.getEyePos().y;
         double dist3d = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-        float targetYaw = (float) -(Math.toDegrees(Math.atan2(dx, dz)));
+        float targetYaw = WorldUtils.yawTo(new Vec3d(player.getX(), player.getY(), player.getZ()),
+                new Vec3d(currentTarget.aimX, player.getY(), currentTarget.aimZ));
         float yawDelta = MathHelper.wrapDegrees(targetYaw - player.getYaw());
 
         boolean moveRight = yawDelta > STRAFE_THRESHOLD;
@@ -483,8 +481,11 @@ public class MiningBot {
         double dz = currentTarget.aimZ - player.getZ();
         double horizDist = Math.sqrt(dx * dx + dz * dz);
         if (horizDist < 0.001) return dy > 0;
-        double pitch = -Math.toDegrees(Math.atan2(dy, horizDist));
-        return pitch <= -60;
+        float[] look = RotationUtils.lookAt(
+                player.getX(), player.getEyeY(), player.getZ(),
+                currentTarget.aimX, currentTarget.aimY, currentTarget.aimZ
+        );
+        return look[1] <= -60;
     }
 
     private boolean hasForwardObstacle(ClientPlayerEntity player) {
@@ -496,13 +497,11 @@ public class MiningBot {
         int fy = MathHelper.floor(player.getY());
         BlockPos feet = BlockPos.ofFloored(fx, fy, fz);
         BlockPos head = feet.up();
-        return isSolid(client.world, feet) || isSolid(client.world, head);
+        return BlockScanner.isSolid(client.world, feet) || BlockScanner.isSolid(client.world, head);
     }
 
     private boolean isSolid(ClientWorld world, BlockPos pos) {
-        BlockState state = world.getBlockState(pos);
-        if (state.isAir()) return false;
-        return !state.getCollisionShape(world, pos).isEmpty();
+        return BlockScanner.isSolid(world, pos);
     }
 
     private boolean updateBlockTracking(MiningTarget target, String blockId) {

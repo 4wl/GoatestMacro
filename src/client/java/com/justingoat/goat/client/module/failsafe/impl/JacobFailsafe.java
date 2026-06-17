@@ -3,10 +3,11 @@ package com.justingoat.goat.client.module.failsafe.impl;
 import com.justingoat.goat.client.module.failsafe.Failsafe;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.ConditionTimer;
 import com.justingoat.goat.client.utils.ScoreboardUtils;
 
 public class JacobFailsafe extends Failsafe {
-    private long contestSince = 0L;
+    private final ConditionTimer contestTimer = new ConditionTimer();
 
     @Override
     public int getPriority() { return 7; }
@@ -17,7 +18,7 @@ public class JacobFailsafe extends Failsafe {
     @Override
     public void onTick() {
         if (!FailsafeDetectionUtils.canCheckMacro()) {
-            contestSince = 0L;
+            contestTimer.reset();
             return;
         }
 
@@ -26,13 +27,11 @@ public class JacobFailsafe extends Failsafe {
             .anyMatch(line -> line.contains("jacob") || line.contains("contest"));
 
         if (!inContest) {
-            contestSince = 0L;
+            contestTimer.reset();
             return;
         }
 
-        long now = System.currentTimeMillis();
-        if (contestSince == 0L) contestSince = now;
-        if (now - contestSince < 2_000L) return;
+        if (!contestTimer.confirmed(2_000L)) return;
 
         ChatUtils.sendWarningMessage("Failsafe: Jacob's Contest detected. Macro will stay paused.");
         FailsafeManager.getInstance().triggerEmergency(this);
@@ -50,6 +49,6 @@ public class JacobFailsafe extends Failsafe {
 
     @Override
     public void reset() {
-        contestSince = 0L;
+        contestTimer.reset();
     }
 }

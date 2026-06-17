@@ -15,4 +15,11 @@ public class MouseLockMixin {
             ci.cancel();
         }
     }
+
+    @Inject(method = "updateMouse", at = @At("HEAD"), cancellable = true)
+    private void goat$blockMacroMouseLook(double timeDelta, CallbackInfo ci) {
+        if (MouseUtils.isMouseUngrabbed()) {
+            ci.cancel();
+        }
+    }
 }

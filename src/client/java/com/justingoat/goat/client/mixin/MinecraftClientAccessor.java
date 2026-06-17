@@ -11,4 +11,7 @@ public interface MinecraftClientAccessor {
 
     @Invoker("doItemUse")
     void invokeDoItemUse();
+
+    @Invoker("handleBlockBreaking")
+    void invokeHandleBlockBreaking(boolean breaking);
 }

@@ -17,6 +17,7 @@ import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.pathfinder.PathRenderer;
 import com.justingoat.goat.client.utils.RotationInterpolator;
 import com.justingoat.goat.client.utils.HypixelUtils;
+import com.justingoat.goat.client.utils.InputUtils;
 import com.justingoat.goat.client.utils.SkyBlockUtils;
 import com.justingoat.goat.client.events.EventManager;
 import org.slf4j.Logger;
@@ -46,6 +47,7 @@ public class GoatClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             ModuleManager.tick(client);
             FailsafeManager.getInstance().tick();
+            InputUtils.tickUngrabbedMouseInputs(client);
             while (openGuiKeyBinding.wasPressed()) {
                 client.setScreen(new GoatMacroScreen());
             }

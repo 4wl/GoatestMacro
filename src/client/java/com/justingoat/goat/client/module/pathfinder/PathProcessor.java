@@ -1,9 +1,11 @@
 package com.justingoat.goat.client.module.pathfinder;
 
 import com.justingoat.goat.client.module.movement.PathfinderTest;
+import com.justingoat.goat.client.utils.AimController;
 import com.justingoat.goat.client.utils.InputUtils;
 import com.justingoat.goat.client.utils.RotationInterpolator;
 import com.justingoat.goat.client.utils.RotationUtils;
+import com.justingoat.goat.client.utils.WorldUtils;
 import net.minecraft.block.DoorBlock;
 import net.minecraft.block.FenceGateBlock;
 import net.minecraft.block.BlockState;
@@ -30,6 +32,7 @@ public class PathProcessor {
     private int currentIndex = 0;
 
     private final RotationUtils rotation = new RotationUtils();
+    private final AimController aim = new AimController(rotation);
     private final PathAote aote = new PathAote();
 
     // Stuck detection (horizontal-only)
@@ -109,17 +112,13 @@ public class PathProcessor {
 
     public void stop() {
         MinecraftClient client = MinecraftClient.getInstance();
-        if (rotation.isActive() && client.player != null) {
-            client.player.setYaw(rotation.getCurrentYaw());
-            client.player.setPitch(rotation.getCurrentPitch());
-        }
+        aim.applyAndClear(client);
         this.path = null;
         this.repathing = false;
         this.repathPauseTicks = 0;
         this.nodeRepathQueued = false;
         this.jumpLockIndex = -1;
         this.jumpLockWasAirborne = false;
-        this.rotation.clear();
         this.aote.stop();
         RotationInterpolator.clearActive();
         InputUtils.releaseAll();
@@ -654,11 +653,7 @@ public class PathProcessor {
     }
 
     private void freezeRotation(MinecraftClient client) {
-        if (client.player != null && rotation.isActive()) {
-            client.player.setYaw(rotation.getCurrentYaw());
-            client.player.setPitch(rotation.getCurrentPitch());
-        }
-        rotation.clear();
+        aim.applyAndClear(client);
         RotationInterpolator.clearActive();
     }
 
@@ -850,13 +845,9 @@ public class PathProcessor {
 
     private void finish(MinecraftClient client) {
         // Commit final rotation to player before releasing
-        if (rotation.isActive() && client.player != null) {
-            client.player.setYaw(rotation.getCurrentYaw());
-            client.player.setPitch(rotation.getCurrentPitch());
-        }
+        aim.applyAndClear(client);
         this.path = null;
         this.nodeRepathQueued = false;
-        this.rotation.clear();
         RotationInterpolator.clearActive();
         InputUtils.releaseAll();
     }
@@ -883,9 +874,7 @@ public class PathProcessor {
     }
 
     private static float calcYaw(double fromX, double fromZ, double toX, double toZ) {
-        double dx = toX - fromX;
-        double dz = toZ - fromZ;
-        return (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
+        return WorldUtils.yawTo(new Vec3d(fromX, 0.0, fromZ), new Vec3d(toX, 0.0, toZ));
     }
 
     private static Vec3d nodeCenter(PathNode node) {

@@ -4,6 +4,8 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "PlayerListHudAccessor",
+    "PlayerListHudMixin",
+    "ChatHudMixin",
     "MouseAccessor",
     "MouseLockMixin",
     "MinecraftClientAccessor",

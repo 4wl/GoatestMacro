@@ -2,10 +2,10 @@ package com.justingoat.goat.client.commands.impl;
 
 import com.justingoat.goat.client.commands.Argument;
 import com.justingoat.goat.client.commands.Command;
+import com.justingoat.goat.client.commands.CommandFeedback;
 import com.justingoat.goat.client.module.GoatModule;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.movement.PathfinderTest;
-import com.justingoat.goat.client.utils.ChatUtils;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.BlockPos;
 
@@ -20,12 +20,12 @@ public class WaypointCommand extends Command {
     public void execute(String[] args) {
         PathfinderTest pathfinder = getPathfinder();
         if (pathfinder == null) {
-            ChatUtils.sendErrorMessage("Pathfinder module not found.");
+            CommandFeedback.moduleNotFound("Pathfinder");
             return;
         }
 
         if (args.length == 0) {
-            ChatUtils.sendInfoMessage("Usage: /goat waypoint add [x y z], remove <index>, clear, list, run <x y z>");
+            CommandFeedback.usage(this);
             return;
         }
 
@@ -34,11 +34,11 @@ public class WaypointCommand extends Command {
             case "remove" -> removeWaypoint(pathfinder, args);
             case "clear" -> {
                 pathfinder.clearWaypoints();
-                ChatUtils.sendSuccessMessage("Cleared Pathfinder waypoints.");
+                CommandFeedback.success("Cleared Pathfinder waypoints.");
             }
             case "list" -> listWaypoints(pathfinder);
             case "run" -> runRoute(pathfinder, args);
-            default -> ChatUtils.sendErrorMessage("Unknown waypoint action: " + args[0]);
+            default -> CommandFeedback.error("Unknown waypoint action: " + args[0]);
         }
     }
 
@@ -68,57 +68,57 @@ public class WaypointCommand extends Command {
         if (args.length == 1) {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.player == null) {
-                ChatUtils.sendErrorMessage("Player not available.");
+                CommandFeedback.error("Player not available.");
                 return;
             }
             pos = client.player.getBlockPos().down();
         } else if (args.length == 4) {
             pos = parsePos(args, 1);
         } else {
-            ChatUtils.sendErrorMessage("Usage: /goat waypoint add [x y z]");
+            CommandFeedback.error("Usage: /goat waypoint add [x y z]");
             return;
         }
 
         pathfinder.addWaypoint(pos);
-        ChatUtils.sendSuccessMessage("Added waypoint #" + pathfinder.getWaypoints().size() + " at " + pos.toShortString());
+        CommandFeedback.success("Added waypoint #" + pathfinder.getWaypoints().size() + " at " + pos.toShortString());
     }
 
     private void removeWaypoint(PathfinderTest pathfinder, String[] args) {
         if (args.length != 2) {
-            ChatUtils.sendErrorMessage("Usage: /goat waypoint remove <index>");
+            CommandFeedback.error("Usage: /goat waypoint remove <index>");
             return;
         }
 
         int index = Integer.parseInt(args[1]) - 1;
         if (pathfinder.removeWaypoint(index)) {
-            ChatUtils.sendSuccessMessage("Removed waypoint #" + (index + 1) + ".");
+            CommandFeedback.success("Removed waypoint #" + (index + 1) + ".");
         } else {
-            ChatUtils.sendErrorMessage("Waypoint index out of range.");
+            CommandFeedback.error("Waypoint index out of range.");
         }
     }
 
     private void listWaypoints(PathfinderTest pathfinder) {
         List<BlockPos> waypoints = pathfinder.getWaypoints();
         if (waypoints.isEmpty()) {
-            ChatUtils.sendInfoMessage("No Pathfinder waypoints set.");
+            CommandFeedback.info("No Pathfinder waypoints set.");
             return;
         }
 
-        ChatUtils.sendHeader("Pathfinder Waypoints");
+        CommandFeedback.header("Pathfinder Waypoints");
         for (int i = 0; i < waypoints.size(); i++) {
-            ChatUtils.sendInfoMessage("#" + (i + 1) + " " + waypoints.get(i).toShortString());
+            CommandFeedback.info("#" + (i + 1) + " " + waypoints.get(i).toShortString());
         }
     }
 
     private void runRoute(PathfinderTest pathfinder, String[] args) {
         if (args.length != 4) {
-            ChatUtils.sendErrorMessage("Usage: /goat waypoint run <x> <y> <z>");
+            CommandFeedback.error("Usage: /goat waypoint run <x> <y> <z>");
             return;
         }
 
         BlockPos target = parsePos(args, 1);
         pathfinder.pathTargetWalk(target);
-        ChatUtils.sendSuccessMessage("Pathing via " + pathfinder.getWaypoints().size()
+        CommandFeedback.success("Pathing via " + pathfinder.getWaypoints().size()
             + " waypoints to " + target.toShortString());
     }
 

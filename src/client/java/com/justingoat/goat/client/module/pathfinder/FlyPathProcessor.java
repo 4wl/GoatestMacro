@@ -1,8 +1,10 @@
 package com.justingoat.goat.client.module.pathfinder;
 
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.AimController;
 import com.justingoat.goat.client.utils.RotationInterpolator;
 import com.justingoat.goat.client.utils.RotationUtils;
+import com.justingoat.goat.client.utils.WorldUtils;
 import it.unimi.dsi.fastutil.longs.Long2DoubleOpenHashMap;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
@@ -36,6 +38,7 @@ public class FlyPathProcessor {
     private boolean complete = false;
     private boolean failed = false;
     private final RotationUtils rotation = new RotationUtils();
+    private final AimController aim = new AimController(rotation);
 
     private Phase phase = Phase.IDLE;
     private int phaseTicks = 0;
@@ -107,16 +110,12 @@ public class FlyPathProcessor {
 
     public void stop() {
         MinecraftClient client = MinecraftClient.getInstance();
-        if (rotation.isActive() && client.player != null) {
-            client.player.setYaw(rotation.getCurrentYaw());
-            client.player.setPitch(rotation.getCurrentPitch());
-        }
+        aim.applyAndClear(client);
         this.path = null;
         this.active = false;
         this.failed = false;
         this.phase = Phase.IDLE;
         this.followEntity = null;
-        this.rotation.clear();
         RotationInterpolator.clearActive();
         InputUtils.releaseAll();
         renderPath = null;
@@ -430,17 +429,13 @@ public class FlyPathProcessor {
 
     private void finish(boolean failed) {
         MinecraftClient client = MinecraftClient.getInstance();
-        if (rotation.isActive() && client.player != null) {
-            client.player.setYaw(rotation.getCurrentYaw());
-            client.player.setPitch(rotation.getCurrentPitch());
-        }
+        aim.applyAndClear(client);
         this.path = null;
         this.active = false;
         this.complete = true;
         this.failed = failed;
         this.phase = Phase.IDLE;
         this.followEntity = null;
-        this.rotation.clear();
         RotationInterpolator.clearActive();
         InputUtils.releaseAll();
         renderPath = null;
@@ -483,9 +478,7 @@ public class FlyPathProcessor {
     }
 
     private static float calcYaw(double fx, double fz, double tx, double tz) {
-        double dx = tx - fx;
-        double dz = tz - fz;
-        return (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
+        return WorldUtils.yawTo(new Vec3d(fx, 0.0, fz), new Vec3d(tx, 0.0, tz));
     }
 
     private static double distSq(double px, double py, double pz, Vec3d t) {

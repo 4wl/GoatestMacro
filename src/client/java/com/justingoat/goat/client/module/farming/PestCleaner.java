@@ -13,24 +13,32 @@ import com.justingoat.goat.client.module.failsafe.impl.TeleportFailsafe;
 import com.justingoat.goat.client.module.pathfinder.FlyPathProcessor;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.NumberValue;
+import com.justingoat.goat.client.utils.AimController;
+import com.justingoat.goat.client.utils.AntiStuckController;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.CommandUtils;
+import com.justingoat.goat.client.utils.EntitySearchUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.InventoryUtils;
+import com.justingoat.goat.client.utils.ItemNameUtils;
+import com.justingoat.goat.client.utils.PathMath;
 import com.justingoat.goat.client.utils.PlotUtils;
 import com.justingoat.goat.client.utils.RotationInterpolator;
 import com.justingoat.goat.client.utils.RotationUtils;
 import com.justingoat.goat.client.utils.ScoreboardUtils;
+import com.justingoat.goat.client.utils.SkyBlockToolUtils;
 import com.justingoat.goat.client.utils.TabUtils;
+import com.justingoat.goat.client.utils.ToolSelector;
+import com.justingoat.goat.client.utils.WorldUtils;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.entity.Entity;
-import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.decoration.ArmorStandEntity;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.particle.TrailParticleEffect;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.Vec3d;
@@ -127,6 +135,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
 
     // ── State data ─────────────────────────────────────────────────
     private final RotationUtils rotation = new RotationUtils();
+    private final AimController aim = new AimController(rotation);
     private final FlyPathProcessor flyProcessor = new FlyPathProcessor();
     private volatile boolean pathing = false;
 
@@ -255,14 +264,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
 
     private void stopAll() {
         flyProcessor.stop();
-        if (rotation.isActive()) {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.player != null) {
-                client.player.setYaw(rotation.getCurrentYaw());
-                client.player.setPitch(rotation.getCurrentPitch());
-            }
-        }
-        rotation.clear();
+        aim.applyAndClear(MinecraftClient.getInstance());
         RotationInterpolator.clearActive();
         InputUtils.releaseAll();
         currentPestTag = null;
@@ -293,7 +295,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         if (previousSlot >= 0) {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.player != null) {
-                client.player.getInventory().setSelectedSlot(previousSlot);
+                InventoryUtils.equipHotbarSlot(client, previousSlot);
             }
             previousSlot = -1;
         }
@@ -505,7 +507,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
                 return;
             }
             vacuumSlot = slot;
-            client.player.getInventory().setSelectedSlot(slot);
+            InventoryUtils.equipHotbarSlot(client, slot);
             debugMsg("Equipped vacuum for Pest Tracker");
         }
 
@@ -616,7 +618,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             return;
         }
         vacuumSlot = slot;
-        client.player.getInventory().setSelectedSlot(slot);
+        InventoryUtils.equipHotbarSlot(client, slot);
 
         String vacName = getVacuumName(client, slot);
         vacuumRange = getVacuumRange(vacName);
@@ -866,10 +868,12 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         double radiusSq = radius * radius;
         Set<Integer> ignored = ignoredEntityIds == null ? Collections.emptySet() : ignoredEntityIds;
 
-        for (Entity entity : client.world.getEntities()) {
+        for (Entity entity : EntitySearchUtils.entities(client, entity ->
+                entity instanceof ArmorStandEntity
+                        && entity.getCustomName() != null
+                        && !ignored.contains(entity.getId())
+        )) {
             if (!(entity instanceof ArmorStandEntity armorStand)) continue;
-            if (armorStand.getCustomName() == null) continue;
-            if (ignored.contains(armorStand.getId())) continue;
 
             String pestName = matchPestName(getEntityName(armorStand));
             if (pestName == null) continue;
@@ -888,11 +892,12 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
             }
         }
 
-        for (Entity entity : client.world.getEntities()) {
-            if (entity instanceof ArmorStandEntity) continue;
-            if (entity == client.player || entity.isRemoved()) continue;
-            if (ignored.contains(entity.getId())) continue;
-
+        for (Entity entity : EntitySearchUtils.entities(client, entity ->
+                !(entity instanceof ArmorStandEntity)
+                        && entity != client.player
+                        && !entity.isRemoved()
+                        && !ignored.contains(entity.getId())
+        )) {
             String pestName = matchPestName(getEntityName(entity));
             if (pestName == null) continue;
 
@@ -917,13 +922,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     }
 
     private static String getEntityName(Entity entity) {
-        if (entity.getCustomName() != null) {
-            return STRIP_COLOR.matcher(entity.getCustomName().getString()).replaceAll("").trim();
-        }
-        if (entity.getDisplayName() != null) {
-            return STRIP_COLOR.matcher(entity.getDisplayName().getString()).replaceAll("").trim();
-        }
-        return "";
+        return EntitySearchUtils.displayName(entity);
     }
 
     private static boolean isDuplicatePest(List<PestInfo> pests, String pestName, Vec3d pestPos) {
@@ -935,26 +934,12 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     }
 
     private static Entity findPestBodyNear(MinecraftClient client, Entity nameTag, String pestName, Set<Integer> ignoredEntityIds) {
-        Box searchBox = nameTag.getBoundingBox().expand(1.0, 2.5, 1.0);
-        Entity best = null;
-        double bestDistSq = Double.MAX_VALUE;
-        for (Entity nearby : client.world.getOtherEntities(nameTag, searchBox)) {
-            if (nearby instanceof ArmorStandEntity) continue;
-            if (!(nearby instanceof LivingEntity)) continue;
-            if (nearby == client.player || nearby.isRemoved()) continue;
-            if (ignoredEntityIds.contains(nearby.getId())) continue;
-
+        return EntitySearchUtils.closestLivingNear(client, nameTag, nameTag.getBoundingBox().expand(1.0, 2.5, 1.0), nearby -> {
+            if (ignoredEntityIds.contains(nearby.getId())) return false;
             String nearbyName = getEntityName(nearby);
             String nearbyPest = matchPestName(nearbyName);
-            if (nearbyPest != null && !nearbyPest.equals(pestName)) continue;
-
-            double distSq = nearby.squaredDistanceTo(nameTag);
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                best = nearby;
-            }
-        }
-        return best;
+            return nearbyPest == null || nearbyPest.equals(pestName);
+        }).orElse(null);
     }
 
     private PestInfo findClosestPest(ClientPlayerEntity player) {
@@ -989,20 +974,12 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     // ═══════════════════════════════════════════════════ Vacuum helpers
 
     private int findVacuumSlot(MinecraftClient client) {
-        for (int i = 0; i < 9; i++) {
-            var stack = client.player.getInventory().getStack(i);
-            if (stack.isEmpty()) continue;
-            String name = stack.getName().getString();
-            for (String vacName : VACUUM_RANGES.keySet()) {
-                if (name.contains(vacName) || name.contains("Vacuum")) return i;
-            }
-        }
-        return -1;
+        return ToolSelector.findBest(client, ToolSelector.Category.VACUUM);
     }
 
     private String getVacuumName(MinecraftClient client, int slot) {
         var stack = client.player.getInventory().getStack(slot);
-        return stack.isEmpty() ? "" : stack.getName().getString();
+        return ItemNameUtils.getStrippedName(stack);
     }
 
     private double getVacuumRange(String vacName) {
@@ -1020,7 +997,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         if (antiStuckNudgeTicks > 0) {
             antiStuckNudgeTicks--;
             float escapeYaw = antiStuckEscapeYaw != null ? antiStuckEscapeYaw : client.player.getYaw() + 180.0f;
-            applyAntiStuckMovement(client, escapeYaw);
+            AntiStuckController.applyMovement(client, escapeYaw);
             InputUtils.setSprint(false);
             InputUtils.setJump(true);
             InputUtils.setSneak(false);
@@ -1070,7 +1047,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
 
         if (antiStuckAttempts < ANTI_STUCK_MAX_NUDGES) {
             antiStuckAttempts++;
-            antiStuckEscapeYaw = chooseAntiStuckEscapeYaw(client, target);
+            antiStuckEscapeYaw = AntiStuckController.chooseEscapeYaw(client, target, ANTI_STUCK_ESCAPE_CHECK_DISTANCE);
             antiStuckNudgeTicks = ANTI_STUCK_NUDGE_TICKS;
             debugMsg("Anti-stuck nudge during " + reason);
             return true;
@@ -1091,122 +1068,12 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         antiStuckEscapeYaw = null;
     }
 
-    private float chooseAntiStuckEscapeYaw(MinecraftClient client, Vec3d target) {
-        BlockPos intersecting = findIntersectingBlock(client);
-        if (intersecting != null) {
-            Direction side = findClosestClearSide(client, intersecting);
-            if (side != null) {
-                Vec3d escape = Vec3d.ofCenter(intersecting).add(
-                    side.getOffsetX() * ANTI_STUCK_ESCAPE_CHECK_DISTANCE,
-                    0.0,
-                    side.getOffsetZ() * ANTI_STUCK_ESCAPE_CHECK_DISTANCE
-                );
-                return yawTo(playerPos(client), escape);
-            }
-        }
-
-        Vec3d pos = playerPos(client);
-        float preferredYaw = target == null ? client.player.getYaw() + 180.0f : yawTo(pos, target);
-        float bestYaw = client.player.getYaw() + 180.0f;
-        float bestScore = Float.MAX_VALUE;
-
-        for (int offset = 0; offset < 360; offset += 20) {
-            float yaw = MathHelper.wrapDegrees(preferredYaw + offset);
-            if (!isEscapeDirectionClear(client, yaw)) continue;
-
-            float score = Math.abs(MathHelper.wrapDegrees(yaw - preferredYaw));
-            if (score < bestScore) {
-                bestScore = score;
-                bestYaw = yaw;
-            }
-        }
-
-        return bestYaw;
-    }
-
-    private void applyAntiStuckMovement(MinecraftClient client, float desiredYaw) {
-        float relYaw = MathHelper.wrapDegrees(desiredYaw - client.player.getYaw());
-
-        boolean forward = relYaw >= -67.5f && relYaw < 67.5f;
-        boolean left = relYaw >= 22.5f && relYaw < 157.5f;
-        boolean back = relYaw >= 112.5f || relYaw < -112.5f;
-        boolean right = relYaw >= -157.5f && relYaw < -22.5f;
-
-        InputUtils.setForward(forward);
-        InputUtils.setBack(back);
-        InputUtils.setLeft(left);
-        InputUtils.setRight(right);
-    }
-
-    private BlockPos findIntersectingBlock(MinecraftClient client) {
-        if (client.player == null || client.world == null) return null;
-
-        Box playerBox = client.player.getBoundingBox().expand(0.02, 0.0, 0.02);
-        BlockPos playerPos = client.player.getBlockPos();
-        BlockPos best = null;
-        double bestDistSq = Double.MAX_VALUE;
-
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dy = 0; dy <= 1; dy++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    BlockPos pos = playerPos.add(dx, dy, dz);
-                    if (isPassable(client, pos)) continue;
-
-                    Box blockBox = new Box(pos);
-                    if (!playerBox.intersects(blockBox)) continue;
-
-                    double distSq = Vec3d.ofCenter(pos).squaredDistanceTo(playerPos(client));
-                    if (distSq < bestDistSq) {
-                        bestDistSq = distSq;
-                        best = pos;
-                    }
-                }
-            }
-        }
-
-        return best;
-    }
-
-    private Direction findClosestClearSide(MinecraftClient client, BlockPos pos) {
-        Direction best = null;
-        double bestDistSq = Double.MAX_VALUE;
-
-        for (Direction direction : Direction.Type.HORIZONTAL) {
-            BlockPos adjacent = pos.offset(direction);
-            if (!isPassable(client, adjacent) || !isPassable(client, adjacent.up())) continue;
-
-            Vec3d side = Vec3d.ofCenter(pos).add(direction.getOffsetX() * 0.5, 0.0, direction.getOffsetZ() * 0.5);
-            double distSq = side.squaredDistanceTo(playerPos(client));
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                best = direction;
-            }
-        }
-
-        return best;
-    }
-
-    private boolean isEscapeDirectionClear(MinecraftClient client, float yaw) {
-        Vec3d pos = playerPos(client);
-        double radians = Math.toRadians(yaw);
-        double dx = -Math.sin(radians) * ANTI_STUCK_ESCAPE_CHECK_DISTANCE;
-        double dz = Math.cos(radians) * ANTI_STUCK_ESCAPE_CHECK_DISTANCE;
-
-        BlockPos feet = BlockPos.ofFloored(pos.x + dx, pos.y + 0.1, pos.z + dz);
-        BlockPos body = BlockPos.ofFloored(pos.x + dx, pos.y + 0.9, pos.z + dz);
-        BlockPos head = BlockPos.ofFloored(pos.x + dx, pos.y + 1.8, pos.z + dz);
-        return isPassable(client, feet) && isPassable(client, body) && isPassable(client, head);
-    }
-
     private static float yawTo(Vec3d from, Vec3d to) {
-        double dx = to.x - from.x;
-        double dz = to.z - from.z;
-        return (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
+        return WorldUtils.yawTo(from, to);
     }
 
     private static boolean isPassable(MinecraftClient client, BlockPos pos) {
-        if (client.world == null) return true;
-        return client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty();
+        return WorldUtils.isPassable(client, pos);
     }
 
     private void requestFlyPath(MinecraftClient client) {
@@ -1469,7 +1336,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         flyProcessor.stop();
         InputUtils.releaseAll();
         markAllowedTeleportCommand();
-        client.player.networkHandler.sendChatCommand("plottp " + plot.commandName);
+        CommandUtils.plotTeleport(client, plot.commandName);
         state = State.WARP_TO_PLOT;
         debugMsg("Warping to pest plot " + formatPlot(plot));
         return true;
@@ -1891,7 +1758,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
         if (autoRewarp.getValue() && !autoRewarpSent
             && client.player != null && client.player.networkHandler != null) {
             markAllowedTeleportCommand();
-            client.player.networkHandler.sendChatCommand("warp garden");
+            CommandUtils.warpGarden(client);
             autoRewarpSent = true;
             debugMsg("PestCleaner complete, rewarping...");
         }
@@ -1944,22 +1811,16 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     }
 
     private boolean shouldActivateTrackerBeforeSearch() {
-        return pestTracker.getValue() && !trackerAttempted;
+        return pestTracker.getValue();
     }
 
     private void initRotation(MinecraftClient client) {
-        if (!rotation.isActive()) {
-            rotation.init(client.player.getYaw(), client.player.getPitch());
-        }
+        aim.initIfNeeded(client);
         RotationInterpolator.setActive(rotation);
     }
 
     private void releaseRotation(MinecraftClient client) {
-        if (rotation.isActive() && client.player != null) {
-            client.player.setYaw(rotation.getCurrentYaw());
-            client.player.setPitch(rotation.getCurrentPitch());
-        }
-        rotation.clear();
+        aim.applyAndClear(client);
         RotationInterpolator.clearActive();
     }
 
@@ -2027,10 +1888,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     }
 
     private double horizontalDistanceTo(Vec3d target, MinecraftClient client) {
-        if (target == null || client.player == null) return Double.MAX_VALUE;
-        double dx = client.player.getX() - target.x;
-        double dz = client.player.getZ() - target.z;
-        return Math.sqrt(dx * dx + dz * dz);
+        return PathMath.horizontalDistance(playerPos(client), target);
     }
 
     private boolean isFlying(MinecraftClient client) {
@@ -2044,7 +1902,7 @@ public class PestCleaner extends GoatModule implements MacroHudInfo {
     }
 
     private static Vec3d playerPos(MinecraftClient client) {
-        return new Vec3d(client.player.getX(), client.player.getY(), client.player.getZ());
+        return WorldUtils.playerPos(client);
     }
 
     private static String formatPos(Vec3d pos) {

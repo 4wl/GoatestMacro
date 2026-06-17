@@ -3,14 +3,15 @@ package com.justingoat.goat.client.module.failsafe.impl;
 import com.justingoat.goat.client.module.failsafe.Failsafe;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.MacroClock;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
 
 public class PlayerGriefFailsafe extends Failsafe {
 
     private static final double PROXIMITY_DISTANCE = 3.0;
     private static final double INSIDE_DISTANCE = 0.5;
-    private long lastInsideCheck = 0;
-    private long lastNearbyCheck = 0;
+    private final MacroClock insideCheckClock = new MacroClock();
+    private final MacroClock nearbyCheckClock = new MacroClock();
 
     @Override
     public int getPriority() { return 4; }
@@ -23,15 +24,13 @@ public class PlayerGriefFailsafe extends Failsafe {
         if (client.player == null || client.world == null) return;
         if (!FailsafeManager.getInstance().isAnyMacroActive()) return;
 
-        long now = System.currentTimeMillis();
-
-        if (now - lastInsideCheck >= 5000) {
-            lastInsideCheck = now;
+        if (insideCheckClock.ready(5000)) {
+            insideCheckClock.mark();
             checkPlayerInside();
         }
 
-        if (now - lastNearbyCheck >= 3000) {
-            lastNearbyCheck = now;
+        if (nearbyCheckClock.ready(3000)) {
+            nearbyCheckClock.mark();
             checkPlayerNearby();
         }
     }
@@ -89,7 +88,7 @@ public class PlayerGriefFailsafe extends Failsafe {
 
     @Override
     public void reset() {
-        lastInsideCheck = 0;
-        lastNearbyCheck = 0;
+        insideCheckClock.resetReady();
+        nearbyCheckClock.resetReady();
     }
 }

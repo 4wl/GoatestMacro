@@ -1,17 +1,17 @@
 package com.justingoat.goat.client.module.failsafe.impl;
 
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
+import com.justingoat.goat.client.utils.BlockScanner;
+import com.justingoat.goat.client.utils.InventoryUtils;
 import com.justingoat.goat.client.utils.SkyBlockUtils;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.effect.StatusEffects;
-import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import net.minecraft.util.math.BlockPos;
 
-import java.util.ArrayList;
 import java.util.List;
 
 final class FailsafeDetectionUtils {
@@ -43,12 +43,7 @@ final class FailsafeDetectionUtils {
     }
 
     static boolean isInventoryFull() {
-        if (CLIENT.player == null) return false;
-        for (int i = 9; i < 36; i++) {
-            ItemStack stack = CLIENT.player.getInventory().getStack(i);
-            if (stack.isEmpty()) return false;
-        }
-        return true;
+        return InventoryUtils.isMainInventoryFull(CLIENT);
     }
 
     static int countNearby(Block target, int horizontalRadius, int down, int up) {
@@ -60,17 +55,8 @@ final class FailsafeDetectionUtils {
     }
 
     static List<BlockPos> nearbyPositions(int horizontalRadius, int down, int up) {
-        List<BlockPos> positions = new ArrayList<>();
-        if (CLIENT.player == null) return positions;
-        BlockPos base = CLIENT.player.getBlockPos();
-        for (int x = -horizontalRadius; x <= horizontalRadius; x++) {
-            for (int y = -down; y <= up; y++) {
-                for (int z = -horizontalRadius; z <= horizontalRadius; z++) {
-                    positions.add(base.add(x, y, z));
-                }
-            }
-        }
-        return positions;
+        if (CLIENT.player == null) return List.of();
+        return BlockScanner.scanCube(CLIENT.player.getBlockPos(), horizontalRadius, down, up);
     }
 
     static boolean isSuspiciousPlacedBlock(BlockState state) {

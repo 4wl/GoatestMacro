@@ -5,6 +5,7 @@ import com.justingoat.goat.client.events.impl.packet.VelocityPacketEvent;
 import com.justingoat.goat.client.module.failsafe.Failsafe;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.MacroClock;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.item.ItemStack;
@@ -12,7 +13,8 @@ import net.minecraft.util.math.BlockPos;
 
 public class VelocityFailsafe extends Failsafe {
 
-    private long suppressUntil = 0;
+    private final MacroClock suppressClock = new MacroClock();
+    private boolean suppressing = false;
 
     @Override
     public int getPriority() { return 6; }
@@ -25,8 +27,8 @@ public class VelocityFailsafe extends Failsafe {
         if (client.player == null || client.world == null) return;
         if (!FailsafeManager.getInstance().isAnyMacroActive()) return;
 
-        long now = System.currentTimeMillis();
-        if (now < suppressUntil) return;
+        if (suppressing && !suppressClock.ready(0L)) return;
+        suppressing = false;
 
         double speed = event.getSpeed();
 
@@ -37,12 +39,12 @@ public class VelocityFailsafe extends Failsafe {
         if (blockBelow.isOf(Blocks.SLIME_BLOCK)) return;
 
         if (client.player.hurtTime > 0) {
-            suppressUntil = now + 1000;
+            suppressFor(1000L);
             return;
         }
 
         if (!blockBelow.isAir() && speed < 1.0) {
-            suppressUntil = now + 1000;
+            suppressFor(1000L);
             return;
         }
 
@@ -67,6 +69,12 @@ public class VelocityFailsafe extends Failsafe {
 
     @Override
     public void reset() {
-        suppressUntil = 0;
+        suppressing = false;
+        suppressClock.resetReady();
+    }
+
+    private void suppressFor(long millis) {
+        suppressClock.delay(millis);
+        suppressing = true;
     }
 }

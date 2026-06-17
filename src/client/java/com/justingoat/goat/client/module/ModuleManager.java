@@ -20,6 +20,7 @@ import com.justingoat.goat.client.module.mining.PowderMacro;
 import com.justingoat.goat.client.module.mining.CommissionMacro;
 import com.justingoat.goat.client.module.render.CustomFOV;
 import com.justingoat.goat.client.module.render.FullBright;
+import com.justingoat.goat.client.module.render.NicknameHider;
 import com.justingoat.goat.client.module.render.PestESP;
 import com.justingoat.goat.client.module.render.TimeChanger;
 import com.justingoat.goat.client.module.settings.FailsafeSettings;
@@ -71,7 +72,6 @@ public final class ModuleManager {
             .mode("Mode", "Hypixel", "Hypixel", "Vanilla")
             .number("Speed", 1.2, 0.1, 3.0)
             .build());
-        register(new FarmingMacro());
         register(new ForagingMacro());
         register(new PathfinderTest());
     }
@@ -80,6 +80,7 @@ public final class ModuleManager {
         register(new PestCleaner());
         register(new PlotCleaningHelper());
         register(new VisitorsMacro());
+        register(new FarmingMacro());
     }
 
     private static void registerMiningModules() {
@@ -109,6 +110,7 @@ public final class ModuleManager {
 //            .build());
         register(new CustomFOV());
         register(new FullBright());
+        register(new NicknameHider());
         register(new PestESP());
         register(new TimeChanger());
     }

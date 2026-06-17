@@ -9,14 +9,24 @@ import com.justingoat.goat.client.module.failsafe.impl.TeleportFailsafe;
 import com.justingoat.goat.client.module.value.BooleanValue;
 import com.justingoat.goat.client.module.value.ModeValue;
 import com.justingoat.goat.client.module.value.NumberValue;
+import com.justingoat.goat.client.utils.ActionTimer;
+import com.justingoat.goat.client.utils.AimController;
+import com.justingoat.goat.client.utils.AntiStuckController;
 import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.BazaarPriceCache;
 import com.justingoat.goat.client.utils.BazaarPriceCache.BazaarItem;
+import com.justingoat.goat.client.utils.CommandUtils;
+import com.justingoat.goat.client.utils.ContainerUtils;
+import com.justingoat.goat.client.utils.EntitySearchUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.ItemNameUtils;
+import com.justingoat.goat.client.utils.MacroClock;
+import com.justingoat.goat.client.utils.RotationInterpolator;
 import com.justingoat.goat.client.utils.RotationUtils;
 import com.justingoat.goat.client.utils.SkyBlockUtils;
-import com.justingoat.goat.client.utils.StringUtils;
+import com.justingoat.goat.client.utils.SkyBlockTextUtils;
 import com.justingoat.goat.client.utils.TabUtils;
+import com.justingoat.goat.client.utils.WorldUtils;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.AbstractSignEditScreen;
@@ -24,23 +34,14 @@ import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
 import net.minecraft.client.input.CharInput;
 import net.minecraft.client.input.KeyInput;
 import net.minecraft.entity.Entity;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.decoration.ArmorStandEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.screen.GenericContainerScreenHandler;
-import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
 import net.minecraft.util.Hand;
-import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.ArrayDeque;
@@ -110,12 +111,10 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     private final BooleanValue antiStuck;
     private final BooleanValue debug;
     private final RotationUtils rotation = new RotationUtils();
+    private final AimController aim = new AimController(rotation);
     private static final Pattern ITEM_AMOUNT_AFTER = Pattern.compile("^(?<name>.+?)\\s+x(?<amount>[\\d,]+)$", Pattern.CASE_INSENSITIVE);
     private static final Pattern ITEM_AMOUNT_BEFORE = Pattern.compile("^\\+?(?<amount>[\\d,]+)\\s+(?<name>.+)$", Pattern.CASE_INSENSITIVE);
     private static final double ANTI_STUCK_ESCAPE_CHECK_DISTANCE = 1.35;
-    private static final float ROTATION_RETARGET_YAW_THRESHOLD = 3.0f;
-    private static final float ROTATION_RETARGET_PITCH_THRESHOLD = 2.0f;
-
     private final List<String> visitors = new ArrayList<>();
     private final Set<String> servedVisitors = new HashSet<>();
     private final Set<String> skippedVisitors = new HashSet<>();
@@ -126,20 +125,20 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     private VisitorTarget currentVisitor = null;
     private VisitorItem activeBazaarItem = null;
     private int activeBazaarInitialCount = 0;
-    private long lastActionTime = 0L;
+    private final ActionTimer actionTimer = new ActionTimer();
     private long lastVisitorRefresh = 0L;
     private long bazaarStateStarted = 0L;
     private int openAttempts = 0;
+    private final MacroClock visitorRefreshClock = new MacroClock();
+    private final MacroClock priceWaitClock = new MacroClock();
     private int recoveryTicks = 0;
     private int noProgressTicks = 0;
     private Vec3d lastProgressPos = null;
     private Float antiStuckEscapeYaw = null;
-    private float lastLookTargetYaw = Float.NaN;
-    private float lastLookTargetPitch = Float.NaN;
     private boolean traveled = false;
     private boolean bazaarCaptureAnnounced = false;
     private boolean signTyped = false;
-    private long lastPriceWaitMessage = 0L;
+    private boolean customAmountEntered = false;
 
     public VisitorsMacro() {
         super("VisitorsMacro", ModuleCategory.MACRO, false);
@@ -156,6 +155,11 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         rejectFiltered = addBoolean("RejectFiltered", false);
         antiStuck = addBoolean("AntiStuck", true);
         debug = addBoolean("Debug", false);
+    }
+
+    @Override
+    public boolean requiresMovement() {
+        return false;
     }
 
     @Override
@@ -177,6 +181,11 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
 
         BazaarPriceCache.updateIfNeeded();
         refreshVisitors(false);
+
+        boolean needsRotation = state == State.MOVE_TO_VISITOR || state == State.OPEN_VISITOR || recoveryTicks > 0;
+        if (!needsRotation && rotation.isActive()) {
+            releaseRotation(client);
+        }
 
         if (state == State.BAZAAR_CAPTURE) {
             handleBazaarCapture(client);
@@ -220,9 +229,9 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
 
         if (autoTravelBarn.getValue() && !traveled && canAct()) {
             markAllowedTeleportCommand();
-            client.player.networkHandler.sendChatCommand("tptoplot barn");
+            CommandUtils.teleportToPlotBarn(client);
             traveled = true;
-            lastActionTime = System.currentTimeMillis();
+            actionTimer.markNow();
             state = State.TRAVELING;
             debugMsg("Traveling to barn");
             return;
@@ -312,7 +321,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         client.interactionManager.interactEntity(client.player, target, Hand.MAIN_HAND);
         client.player.swingHand(Hand.MAIN_HAND);
         openAttempts++;
-        lastActionTime = System.currentTimeMillis();
+        actionTimer.markNow();
         debugMsg("Interacted with " + currentVisitor.name());
 
         if (openAttempts > 6) {
@@ -330,7 +339,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
                 client.player.closeHandledScreen();
             }
             state = State.SELECT_VISITOR;
-            lastActionTime = System.currentTimeMillis();
+            actionTimer.markNow();
             return;
         }
 
@@ -380,13 +389,12 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     }
 
     private void waitForBazaarPrices() {
-        long now = System.currentTimeMillis();
-        if (now - lastPriceWaitMessage > 5000L) {
+        if (priceWaitClock.ready(5000L)) {
             ChatUtils.sendWarningMessage("[Visitors] waiting for Bazaar prices" + bazaarErrorSuffix());
-            lastPriceWaitMessage = now;
+            priceWaitClock.mark();
         }
         BazaarPriceCache.updateIfNeeded();
-        lastActionTime = System.currentTimeMillis();
+        actionTimer.markNow();
     }
 
     private void handleFilteredVisitor(GenericContainerScreenHandler handler, Integer refuseSlot, VisitorEconomics economics) {
@@ -413,7 +421,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         if (client.player != null) {
             client.player.closeHandledScreen();
         }
-        lastActionTime = 0L;
+        actionTimer.resetReady();
         if ("AutoBuy".equals(autoBazaar.getValue())) {
             activeBazaarItem = null;
             bazaarBuyState = BazaarBuyState.START;
@@ -433,13 +441,13 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
             ChatUtils.sendSuccessMessage("[Visitors] Bazaar capture complete. Buy items, then rerun VisitorsMacro.");
             currentVisitor = null;
             state = State.FINISHED;
-            lastActionTime = System.currentTimeMillis();
+            actionTimer.markNow();
             return;
         }
 
         VisitorItem item = bazaarQueue.pollFirst();
         copyToClipboard(String.valueOf(item.amount()));
-        client.player.networkHandler.sendChatCommand("bz " + item.name());
+        CommandUtils.openBazaar(client, item.name());
         ChatUtils.sendInfoMessage("[Visitors] opened Bazaar for " + item.name() + " x" + item.amount() + " (amount copied)");
         if (!bazaarQueue.isEmpty()) {
             ChatUtils.sendInfoMessage("[Visitors] remaining: " + formatShoppingList(bazaarQueue));
@@ -453,7 +461,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         bazaarQueue.clear();
         currentVisitor = null;
         state = State.FINISHED;
-        lastActionTime = System.currentTimeMillis();
+        actionTimer.markNow();
         setEnabled(false);
     }
 
@@ -465,12 +473,14 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
             activeBazaarItem = bazaarQueue.pollFirst();
             if (activeBazaarItem == null) {
                 ChatUtils.sendSuccessMessage("[Visitors] AutoBazaar complete, reopening visitor");
+                if (client.currentScreen != null) client.player.closeHandledScreen();
                 currentVisitor = null;
                 state = State.SELECT_VISITOR;
-                lastActionTime = System.currentTimeMillis();
+                actionTimer.markNow();
                 return;
             }
             activeBazaarInitialCount = countInventoryItem(activeBazaarItem.name());
+            customAmountEntered = false;
             setBazaarBuyState(BazaarBuyState.START);
         }
 
@@ -482,15 +492,12 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         if (client.currentScreen instanceof AbstractSignEditScreen signScreen) {
             if (bazaarBuyState == BazaarBuyState.WAIT_AFTER_BUY) {
                 signScreen.close();
-                lastActionTime = System.currentTimeMillis() + 600L;
+                actionTimer.delayFromNow(600L);
                 return;
             }
             if (bazaarBuyState == BazaarBuyState.CONFIRM_BUY) {
-                signScreen.keyPressed(new KeyInput(GLFW.GLFW_KEY_ENTER, 0, 0));
-                if (System.currentTimeMillis() - bazaarStateStarted > 1200L) {
-                    signScreen.close();
-                }
-                lastActionTime = System.currentTimeMillis() + 500L;
+                signScreen.close();
+                actionTimer.delayFromNow(500L);
                 return;
             }
             handleSignInput(signScreen);
@@ -500,6 +507,9 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         if (!(client.currentScreen instanceof GenericContainerScreen screen)) {
             if (bazaarBuyState == BazaarBuyState.START) {
                 openBazaarProduct(client);
+            } else if (bazaarBuyState == BazaarBuyState.WAIT_AFTER_BUY) {
+                activeBazaarItem = null;
+                actionTimer.markNow();
             }
             return;
         }
@@ -519,9 +529,9 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
             case CONFIRM_BUY -> handleConfirmBuy(handler, lowerTitle);
             case WARNING_CONFIRM -> handleWarningConfirm(handler, lowerTitle);
             case WAIT_AFTER_BUY -> {
-                activeBazaarItem = null;
                 if (client.player != null) client.player.closeHandledScreen();
-                lastActionTime = System.currentTimeMillis() + 600L;
+                activeBazaarItem = null;
+                actionTimer.markNow();
             }
         }
     }
@@ -531,9 +541,9 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         if (client.currentScreen != null) {
             client.player.closeHandledScreen();
         }
-        client.player.networkHandler.sendChatCommand("bz " + activeBazaarItem.name());
+        CommandUtils.openBazaar(client, activeBazaarItem.name());
         setBazaarBuyState(BazaarBuyState.OPEN_PRODUCT);
-        lastActionTime = System.currentTimeMillis() + 900L;
+        actionTimer.delayFromNow(900L);
     }
 
     private void handleBazaarProductPage(GenericContainerScreenHandler handler, String lowerTitle) {
@@ -577,7 +587,11 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         Integer customAmount = findContainerSlot(handler, "custom amount", false);
         if (customAmount != null) {
             clickSlot(handler, customAmount);
-            setBazaarBuyState(BazaarBuyState.ENTER_SIGN);
+            if (customAmountEntered) {
+                setBazaarBuyState(BazaarBuyState.CONFIRM_BUY);
+            } else {
+                setBazaarBuyState(BazaarBuyState.ENTER_SIGN);
+            }
             return;
         }
 
@@ -597,13 +611,14 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
                 signScreen.charTyped(new CharInput(amount.charAt(i), 0));
             }
             signTyped = true;
-            lastActionTime = System.currentTimeMillis() + 250L;
+            actionTimer.delayFromNow(250L);
             return;
         }
 
-        signScreen.keyPressed(new KeyInput(GLFW.GLFW_KEY_ENTER, 0, 0));
+        signScreen.close();
+        customAmountEntered = true;
         setBazaarBuyState(BazaarBuyState.CONFIRM_BUY);
-        lastActionTime = System.currentTimeMillis() + 900L;
+        actionTimer.delayFromNow(900L);
     }
 
     private void handleConfirmBuy(GenericContainerScreenHandler handler, String lowerTitle) {
@@ -614,7 +629,9 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
 
         Integer confirmSlot = findConfirmBuySlot(handler);
         if (confirmSlot == null) {
-            if (!lowerTitle.contains("instant buy")) {
+            if (lowerTitle.contains("instant buy") || lowerTitle.contains("how many")) {
+                setBazaarBuyState(BazaarBuyState.SELECT_AMOUNT);
+            } else if (!lowerTitle.contains("confirm")) {
                 setBazaarBuyState(BazaarBuyState.CLICK_INSTANT_BUY);
             }
             return;
@@ -633,7 +650,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         ChatUtils.sendInfoMessage("[Visitors] bought " + activeBazaarItem.name() + " x" + activeBazaarItem.amount()
             + " for about " + SkyBlockUtils.formatCoins(Math.round(actualCost)));
         setBazaarBuyState(BazaarBuyState.WAIT_AFTER_BUY);
-        lastActionTime = System.currentTimeMillis() + 1200L;
+        actionTimer.delayFromNow(1200L);
     }
 
     private void handleWarningConfirm(GenericContainerScreenHandler handler, String lowerTitle) {
@@ -645,24 +662,20 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         if (confirm != null) {
             clickSlot(handler, confirm);
             setBazaarBuyState(BazaarBuyState.WAIT_AFTER_BUY);
-            lastActionTime = System.currentTimeMillis() + 1200L;
+            actionTimer.delayFromNow(1200L);
         }
     }
 
     private Integer findExactAmountSlot(GenericContainerScreenHandler handler, int amount) {
-        int limit = Math.min(handler.slots.size(), 54);
-        for (int slot = 0; slot < limit; slot++) {
-            ItemStack stack = getStack(handler, slot);
-            if (stack.isEmpty()) continue;
-            String name = strip(stack.getName().getString()).toLowerCase(Locale.ROOT);
-            if (!name.startsWith("buy") && !name.startsWith("fill")) continue;
+        return ContainerUtils.findSlot(handler, stack -> {
+            String name = ItemNameUtils.getStrippedName(stack).toLowerCase(Locale.ROOT);
+            if (!name.startsWith("buy") && !name.startsWith("fill") && !name.startsWith("custom")) return false;
             String lore = String.join(" ", getLoreLines(stack)).replace(",", "");
             Matcher matcher = Pattern.compile("\\b" + amount + "\\s*x\\b", Pattern.CASE_INSENSITIVE).matcher(lore);
-            if (matcher.find()) return slot;
+            if (matcher.find()) return true;
             matcher = Pattern.compile("\\b" + amount + "\\s+items?\\b", Pattern.CASE_INSENSITIVE).matcher(lore);
-            if (matcher.find()) return slot;
-        }
-        return null;
+            return matcher.find();
+        });
     }
 
     private Integer findConfirmBuySlot(GenericContainerScreenHandler handler) {
@@ -680,38 +693,20 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         ChatUtils.sendInfoMessage("[Visitors] bought " + activeBazaarItem.name() + " x" + activeBazaarItem.amount()
             + " for about " + SkyBlockUtils.formatCoins(Math.round(estimateBazaarCost(activeBazaarItem))));
         setBazaarBuyState(BazaarBuyState.WAIT_AFTER_BUY);
-        lastActionTime = System.currentTimeMillis() + 1200L;
+        actionTimer.delayFromNow(1200L);
     }
 
     private Integer findContainerSlot(GenericContainerScreenHandler handler, String needle, boolean includeLore) {
         String normalizedNeedle = BazaarPriceCache.normalize(needle);
-        int limit = Math.min(handler.slots.size(), 54);
-        for (int slot = 0; slot < limit; slot++) {
-            ItemStack stack = getStack(handler, slot);
-            if (stack.isEmpty()) continue;
-            String name = strip(stack.getName().getString());
-            if (BazaarPriceCache.normalize(name).contains(normalizedNeedle)) return slot;
-            if (includeLore && BazaarPriceCache.normalize(String.join(" ", getLoreLines(stack))).contains(normalizedNeedle)) {
-                return slot;
-            }
-        }
-        return null;
+        return ContainerUtils.findSlot(handler, stack -> {
+            String name = ItemNameUtils.getStrippedName(stack);
+            if (BazaarPriceCache.normalize(name).contains(normalizedNeedle)) return true;
+            return includeLore && BazaarPriceCache.normalize(String.join(" ", getLoreLines(stack))).contains(normalizedNeedle);
+        });
     }
 
     private double extractCoinCost(List<String> lore) {
-        double best = 0.0;
-        for (String line : lore) {
-            String lower = line.toLowerCase(Locale.ROOT);
-            if (!lower.contains("coin") && !lower.contains("cost") && !lower.contains("price")) continue;
-            Matcher matcher = Pattern.compile("([\\d,]+(?:\\.\\d+)?)").matcher(line);
-            while (matcher.find()) {
-                try {
-                    best = Math.max(best, Double.parseDouble(matcher.group(1).replace(",", "")));
-                } catch (NumberFormatException ignored) {
-                }
-            }
-        }
-        return best;
+        return SkyBlockTextUtils.extractCoinCost(lore);
     }
 
     private double estimateBazaarCost(VisitorItem item) {
@@ -738,7 +733,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         if (client.player != null) client.player.closeHandledScreen();
         currentVisitor = null;
         state = State.SELECT_VISITOR;
-        lastActionTime = System.currentTimeMillis();
+        actionTimer.markNow();
     }
 
     private void markCurrentServed(String action) {
@@ -752,7 +747,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         }
         currentVisitor = null;
         state = State.SELECT_VISITOR;
-        lastActionTime = System.currentTimeMillis();
+        actionTimer.markNow();
     }
 
     private void closeAndSkipCurrent() {
@@ -766,7 +761,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         }
         currentVisitor = null;
         state = State.SELECT_VISITOR;
-        lastActionTime = System.currentTimeMillis();
+        actionTimer.markNow();
     }
 
     private void finishIfDone() {
@@ -783,9 +778,8 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     }
 
     private void refreshVisitors(boolean force) {
-        long now = System.currentTimeMillis();
-        if (!force && now - lastVisitorRefresh < 1000L) return;
-        lastVisitorRefresh = now;
+        if (!force && !visitorRefreshClock.ready(1000L)) return;
+        visitorRefreshClock.mark();
 
         List<String> tabLines = TabUtils.getTabLines();
         List<String> parsed = new ArrayList<>();
@@ -813,64 +807,41 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     }
 
     private Optional<VisitorTarget> findClosestVisitor(MinecraftClient client) {
-        double scanRangeSq = scanRange.getValue() * scanRange.getValue();
-        VisitorTarget closest = null;
-        double closestDistSq = Double.MAX_VALUE;
-
-        for (Entity entity : client.world.getEntities()) {
-            if (!(entity instanceof ArmorStandEntity stand)) continue;
-            if (stand.getCustomName() == null) continue;
+        return EntitySearchUtils.closestArmorStand(client, scanRange.getValue(), stand -> {
+            if (stand.getCustomName() == null) return false;
 
             String standName = cleanName(stand.getCustomName().getString());
             String matched = visitors.stream()
                 .filter(visitor -> normalizeName(visitor).equals(normalizeName(standName)))
                 .findFirst()
                 .orElse(null);
-            if (matched == null) continue;
+            if (matched == null) return false;
 
             String normalized = normalizeName(matched);
-            if (servedVisitors.contains(normalized) || skippedVisitors.contains(normalized)) continue;
-
-            double distanceSq = client.player.squaredDistanceTo(stand);
-            if (distanceSq > scanRangeSq || distanceSq >= closestDistSq) continue;
-
-            closestDistSq = distanceSq;
-            closest = new VisitorTarget(matched, stand, findClickTarget(client, stand));
-        }
-
-        return Optional.ofNullable(closest);
+            return !servedVisitors.contains(normalized) && !skippedVisitors.contains(normalized);
+        }).map(stand -> {
+            String standName = cleanName(stand.getCustomName().getString());
+            String matched = visitors.stream()
+                .filter(visitor -> normalizeName(visitor).equals(normalizeName(standName)))
+                .findFirst()
+                .orElse(standName);
+            return new VisitorTarget(matched, stand, findClickTarget(client, stand));
+        });
     }
 
     private Entity findClickTarget(MinecraftClient client, Entity nameStand) {
         Box searchBox = nameStand.getBoundingBox().expand(2.0, 3.0, 2.0);
-        Entity closest = null;
-        double closestDistSq = Double.MAX_VALUE;
-        for (Entity entity : client.world.getOtherEntities(nameStand, searchBox)) {
-            if (entity instanceof ArmorStandEntity) continue;
-            if (!(entity instanceof LivingEntity)) continue;
-            if (entity == client.player || entity.isRemoved()) continue;
-            double distSq = entity.squaredDistanceTo(nameStand);
-            if (distSq < closestDistSq) {
-                closestDistSq = distSq;
-                closest = entity;
-            }
-        }
-        return closest != null ? closest : nameStand;
+        return EntitySearchUtils.closestLivingNear(client, nameStand, searchBox, entity -> true).orElse(nameStand);
     }
 
     private Integer findOfferSlot(GenericContainerScreenHandler handler, String itemNameNeedle, boolean accept) {
-        int limit = Math.min(handler.slots.size(), 54);
-        for (int slot = 0; slot < limit; slot++) {
-            ItemStack stack = getStack(handler, slot);
-            if (stack.isEmpty()) continue;
-
-            String name = strip(stack.getName().getString()).toLowerCase(Locale.ROOT);
+        return ContainerUtils.findSlot(handler, stack -> {
+            String name = ItemNameUtils.getStrippedName(stack).toLowerCase(Locale.ROOT);
             String lore = String.join(" ", getLoreLines(stack)).toLowerCase(Locale.ROOT);
-            if (name.contains(itemNameNeedle)) return slot;
-            if (accept && lore.contains("click to give")) return slot;
-            if (!accept && (name.contains("refuse") || name.contains("reject") || lore.contains("refuse offer"))) return slot;
-        }
-        return null;
+            if (name.contains(itemNameNeedle)) return true;
+            if (accept && lore.contains("click to give")) return true;
+            return !accept && (name.contains("refuse") || name.contains("reject") || lore.contains("refuse offer"));
+        });
     }
 
     private boolean canAcceptOffer(List<String> lore) {
@@ -1013,11 +984,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     }
 
     private int parseAmount(String raw) {
-        try {
-            return Math.max(1, Integer.parseInt(raw.replace(",", "")));
-        } catch (NumberFormatException ignored) {
-            return 1;
-        }
+        return SkyBlockTextUtils.parseAmount(raw, 1);
     }
 
     private int countInventoryItem(String itemName) {
@@ -1028,7 +995,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         for (int slot = 0; slot < client.player.getInventory().size(); slot++) {
             ItemStack stack = client.player.getInventory().getStack(slot);
             if (stack.isEmpty()) continue;
-            String name = strip(stack.getName().getString());
+            String name = ItemNameUtils.getStrippedName(stack);
             if (BazaarPriceCache.normalize(name).equals(target)) {
                 total += stack.getCount();
             }
@@ -1062,28 +1029,14 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     }
 
     private void lookAt(MinecraftClient client, Entity target, float speed) {
-        if (!rotation.isActive()) {
-            rotation.init(client.player.getYaw(), client.player.getPitch());
-        }
-        Vec3d eye = client.player.getEyePos();
-        Vec3d targetPos = target.getBoundingBox().getCenter();
-        float[] look = RotationUtils.lookAt(eye.x, eye.y, eye.z, targetPos.x, targetPos.y, targetPos.z);
-        if (shouldRetargetRotation(look[0], look[1])) {
-            rotation.setTarget(look[0], look[1]);
-            lastLookTargetYaw = look[0];
-            lastLookTargetPitch = look[1];
-        }
-        rotation.setSpeed(speed);
-        rotation.tick();
-        client.player.setYaw(rotation.getCurrentYaw());
-        client.player.setPitch(rotation.getCurrentPitch());
+        aim.initIfNeeded(client);
+        RotationInterpolator.setActive(rotation);
+        aim.aimAtEntity(client, target, speed);
     }
 
-    private boolean shouldRetargetRotation(float yaw, float pitch) {
-        if (Float.isNaN(lastLookTargetYaw) || Float.isNaN(lastLookTargetPitch)) return true;
-        float yawDelta = Math.abs(MathHelper.wrapDegrees(yaw - lastLookTargetYaw));
-        float pitchDelta = Math.abs(pitch - lastLookTargetPitch);
-        return yawDelta >= ROTATION_RETARGET_YAW_THRESHOLD || pitchDelta >= ROTATION_RETARGET_PITCH_THRESHOLD;
+    private void releaseRotation(MinecraftClient client) {
+        aim.applyAndClear(client);
+        RotationInterpolator.clearActive();
     }
 
     private void updateAntiStuck(MinecraftClient client) {
@@ -1099,7 +1052,11 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
 
         noProgressTicks = 0;
         recoveryTicks = 14;
-        antiStuckEscapeYaw = chooseAntiStuckEscapeYaw(client);
+        antiStuckEscapeYaw = AntiStuckController.chooseEscapeYaw(
+            client,
+            currentVisitor == null ? null : currentVisitor.clickTarget().getBoundingBox().getCenter(),
+            ANTI_STUCK_ESCAPE_CHECK_DISTANCE
+        );
         InputUtils.releaseAll();
         debugMsg("AntiStuck recovery");
     }
@@ -1110,9 +1067,13 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
             lookAt(client, currentVisitor.clickTarget(), 0.45f);
         }
         if (antiStuckEscapeYaw == null) {
-            antiStuckEscapeYaw = chooseAntiStuckEscapeYaw(client);
+            antiStuckEscapeYaw = AntiStuckController.chooseEscapeYaw(
+                client,
+                currentVisitor == null ? null : currentVisitor.clickTarget().getBoundingBox().getCenter(),
+                ANTI_STUCK_ESCAPE_CHECK_DISTANCE
+            );
         }
-        applyAntiStuckMovement(client, antiStuckEscapeYaw);
+        AntiStuckController.applyMovement(client, antiStuckEscapeYaw);
         InputUtils.setJump(recoveryTicks > 2);
         if (recoveryTicks <= 0) {
             InputUtils.releaseAll();
@@ -1122,149 +1083,22 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         }
     }
 
-    private float chooseAntiStuckEscapeYaw(MinecraftClient client) {
-        BlockPos intersecting = findIntersectingBlock(client);
-        if (intersecting != null) {
-            Direction side = findClosestClearSide(client, intersecting);
-            if (side != null) {
-                Vec3d escape = Vec3d.ofCenter(intersecting).add(
-                    side.getOffsetX() * ANTI_STUCK_ESCAPE_CHECK_DISTANCE,
-                    0.0,
-                    side.getOffsetZ() * ANTI_STUCK_ESCAPE_CHECK_DISTANCE
-                );
-                return yawTo(playerPos(client), escape);
-            }
-        }
-
-        Vec3d pos = playerPos(client);
-        Vec3d target = currentVisitor == null ? null : currentVisitor.clickTarget().getBoundingBox().getCenter();
-        float preferredYaw = target == null ? MathHelper.wrapDegrees(client.player.getYaw() + 180.0f) : yawTo(pos, target);
-        float bestYaw = MathHelper.wrapDegrees(client.player.getYaw() + 180.0f);
-        float bestScore = Float.MAX_VALUE;
-        int[] offsets = {0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180};
-
-        for (int offset : offsets) {
-            float yaw = MathHelper.wrapDegrees(preferredYaw + offset);
-            if (!isEscapeDirectionClear(client, yaw)) continue;
-
-            float score = Math.abs(MathHelper.wrapDegrees(yaw - preferredYaw));
-            if (score < bestScore) {
-                bestScore = score;
-                bestYaw = yaw;
-            }
-        }
-        return bestYaw;
-    }
-
-    private void applyAntiStuckMovement(MinecraftClient client, float desiredYaw) {
-        float relYaw = MathHelper.wrapDegrees(desiredYaw - client.player.getYaw());
-
-        boolean forward = relYaw >= -67.5f && relYaw < 67.5f;
-        boolean left = relYaw >= 22.5f && relYaw < 157.5f;
-        boolean back = relYaw >= 112.5f || relYaw < -112.5f;
-        boolean right = relYaw >= -157.5f && relYaw < -22.5f;
-
-        InputUtils.setForward(forward);
-        InputUtils.setBack(back);
-        InputUtils.setLeft(left);
-        InputUtils.setRight(right);
-    }
-
-    private BlockPos findIntersectingBlock(MinecraftClient client) {
-        if (client.player == null || client.world == null) return null;
-
-        Box playerBox = client.player.getBoundingBox().expand(0.02, 0.0, 0.02);
-        BlockPos playerBlock = client.player.getBlockPos();
-        BlockPos best = null;
-        double bestDistSq = Double.MAX_VALUE;
-
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dy = 0; dy <= 1; dy++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    BlockPos pos = playerBlock.add(dx, dy, dz);
-                    if (isPassable(client, pos)) continue;
-
-                    Box blockBox = new Box(pos);
-                    if (!playerBox.intersects(blockBox)) continue;
-
-                    double distSq = Vec3d.ofCenter(pos).squaredDistanceTo(playerPos(client));
-                    if (distSq < bestDistSq) {
-                        bestDistSq = distSq;
-                        best = pos;
-                    }
-                }
-            }
-        }
-        return best;
-    }
-
-    private Direction findClosestClearSide(MinecraftClient client, BlockPos pos) {
-        Direction best = null;
-        double bestDistSq = Double.MAX_VALUE;
-
-        for (Direction direction : Direction.Type.HORIZONTAL) {
-            BlockPos adjacent = pos.offset(direction);
-            if (!isPassable(client, adjacent) || !isPassable(client, adjacent.up())) continue;
-
-            Vec3d side = Vec3d.ofCenter(pos).add(direction.getOffsetX() * 0.5, 0.0, direction.getOffsetZ() * 0.5);
-            double distSq = side.squaredDistanceTo(playerPos(client));
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                best = direction;
-            }
-        }
-        return best;
-    }
-
-    private boolean isEscapeDirectionClear(MinecraftClient client, float yaw) {
-        Vec3d pos = playerPos(client);
-        double radians = Math.toRadians(yaw);
-        double dx = -Math.sin(radians) * ANTI_STUCK_ESCAPE_CHECK_DISTANCE;
-        double dz = Math.cos(radians) * ANTI_STUCK_ESCAPE_CHECK_DISTANCE;
-
-        BlockPos feet = BlockPos.ofFloored(pos.x + dx, pos.y + 0.1, pos.z + dz);
-        BlockPos body = BlockPos.ofFloored(pos.x + dx, pos.y + 0.9, pos.z + dz);
-        BlockPos head = BlockPos.ofFloored(pos.x + dx, pos.y + 1.8, pos.z + dz);
-        return isPassable(client, feet) && isPassable(client, body) && isPassable(client, head);
-    }
-
-    private boolean isPassable(MinecraftClient client, BlockPos pos) {
-        if (client.world == null) return true;
-        return client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty();
-    }
-
-    private static float yawTo(Vec3d from, Vec3d to) {
-        double dx = to.x - from.x;
-        double dz = to.z - from.z;
-        return (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f;
-    }
-
     private boolean clickSlot(GenericContainerScreenHandler handler, int slot) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player == null || client.interactionManager == null) return false;
-        client.interactionManager.clickSlot(handler.syncId, slot, 0, SlotActionType.PICKUP, client.player);
-        lastActionTime = System.currentTimeMillis();
+        if (!ContainerUtils.clickSlot(handler, slot)) return false;
+        actionTimer.markNow();
         return true;
     }
 
     private ItemStack getStack(GenericContainerScreenHandler handler, int slot) {
-        if (slot < 0 || slot >= handler.slots.size()) return ItemStack.EMPTY;
-        return handler.slots.get(slot).getStack();
+        return ContainerUtils.getStack(handler, slot);
     }
 
     private List<String> getLoreLines(ItemStack stack) {
-        if (stack.isEmpty()) return Collections.emptyList();
-        List<String> result = new ArrayList<>();
-        List<Text> tooltip = stack.getTooltip(net.minecraft.item.Item.TooltipContext.DEFAULT, null, net.minecraft.item.tooltip.TooltipType.BASIC);
-        for (int i = 1; i < tooltip.size(); i++) {
-            String line = strip(tooltip.get(i).getString());
-            if (!line.isBlank()) result.add(line);
-        }
-        return result;
+        return ContainerUtils.getLoreLines(stack);
     }
 
     private boolean canAct() {
-        return System.currentTimeMillis() - lastActionTime >= (long) actionDelay.getValue();
+        return actionTimer.ready((long) actionDelay.getValue());
     }
 
     private void resetMovementProgress(MinecraftClient client) {
@@ -1280,30 +1114,28 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
         visitors.clear();
         servedVisitors.clear();
         skippedVisitors.clear();
-        lastActionTime = 0L;
+        actionTimer.resetReady();
         lastVisitorRefresh = 0L;
         openAttempts = 0;
         recoveryTicks = 0;
         noProgressTicks = 0;
         lastProgressPos = null;
         antiStuckEscapeYaw = null;
-        lastLookTargetYaw = Float.NaN;
-        lastLookTargetPitch = Float.NaN;
         traveled = false;
         bazaarCaptureAnnounced = false;
-        lastPriceWaitMessage = 0L;
-        rotation.clear();
+        customAmountEntered = false;
+        priceWaitClock.resetReady();
+        visitorRefreshClock.resetReady();
+        releaseRotation(MinecraftClient.getInstance());
         InputUtils.releaseAll();
     }
 
     private void stop() {
-        rotation.clear();
+        releaseRotation(MinecraftClient.getInstance());
         InputUtils.releaseAll();
         currentVisitor = null;
         state = State.WAITING;
         antiStuckEscapeYaw = null;
-        lastLookTargetYaw = Float.NaN;
-        lastLookTargetPitch = Float.NaN;
     }
 
     private String cleanName(String name) {
@@ -1311,7 +1143,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     }
 
     private Vec3d playerPos(MinecraftClient client) {
-        return new Vec3d(client.player.getX(), client.player.getY(), client.player.getZ());
+        return WorldUtils.playerPos(client);
     }
 
     private String normalizeName(String name) {
@@ -1319,8 +1151,7 @@ public class VisitorsMacro extends GoatModule implements MacroHudInfo {
     }
 
     private String strip(String text) {
-        String stripped = Formatting.strip(StringUtils.stripColor(text));
-        return stripped == null ? "" : stripped.trim();
+        return SkyBlockTextUtils.strip(text);
     }
 
     private void copyToClipboard(String text) {

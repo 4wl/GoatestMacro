@@ -5,15 +5,19 @@ import com.justingoat.goat.client.module.ModuleCategory;
 import com.justingoat.goat.client.module.ModuleManager;
 import com.justingoat.goat.client.module.movement.PathfinderTest;
 import com.justingoat.goat.client.module.value.NumberValue;
+import com.justingoat.goat.client.utils.ChatUtils;
 import com.justingoat.goat.client.utils.InputUtils;
+import com.justingoat.goat.client.utils.InventoryUtils;
 import com.justingoat.goat.client.utils.RotationUtils;
+import com.justingoat.goat.client.utils.SkyBlockTextUtils;
 import com.justingoat.goat.client.utils.TabUtils;
+import com.justingoat.goat.client.utils.TickTimer;
+import com.justingoat.goat.client.utils.ToolSelector;
+import com.justingoat.goat.client.utils.WorldUtils;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.item.ItemStack;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
-import net.minecraft.text.Text;
 
 import java.util.*;
 import java.util.regex.Matcher;
@@ -29,7 +33,7 @@ public class CommissionMacro extends GoatModule {
     private final NumberValue weaponSlot;
 
     private CState currentState = CState.IDLE;
-    private int pauseTicks = 0;
+    private final TickTimer pauseTimer = new TickTimer();
 
     private List<Commission> commissions = new ArrayList<>();
     private Commission currentCommission = null;
@@ -62,6 +66,7 @@ public class CommissionMacro extends GoatModule {
             resetState();
             currentState = CState.CHOOSING;
             completedCount = 0;
+            MiningToolUtils.equipMiningToolFromHotbar(MinecraftClient.getInstance());
             message("§a[Goat] CommissionMacro enabled.");
         } else if (!enabled && wasEnabled) {
             resetState();
@@ -74,7 +79,10 @@ public class CommissionMacro extends GoatModule {
         if (!isEnabled() || client.player == null || client.world == null) return;
         miningBot.setCost(MiningBot.MITHRIL_COSTS);
 
-        if (pauseTicks > 0) { pauseTicks--; return; }
+        if (pauseTimer.active()) {
+            pauseTimer.tick();
+            return;
+        }
 
         switch (currentState) {
             case IDLE -> currentState = CState.CHOOSING;
@@ -202,16 +210,16 @@ public class CommissionMacro extends GoatModule {
     }
 
     private void handleClaiming(MinecraftClient client) {
-        int pigeonSlot = findItemSlot(client.player, "Royal Pigeon");
+        int pigeonSlot = ToolSelector.findBest(client, ToolSelector.Category.ROYAL_PIGEON);
         if (pigeonSlot >= 0) {
             if (client.player.getInventory().getSelectedSlot() != pigeonSlot) {
                 InputUtils.setHotbarSlot(pigeonSlot);
-                pauseTicks = 3;
+                pauseTimer.set(3);
                 return;
             }
             InputUtils.setUse(true);
             MinecraftClient.getInstance().execute(() -> InputUtils.setUse(false));
-            pauseTicks = 10;
+            pauseTimer.set(10);
             currentState = CState.WAITING_GUI;
             return;
         }
@@ -223,7 +231,7 @@ public class CommissionMacro extends GoatModule {
         if (dist < 4) {
             InputUtils.setUse(true);
             MinecraftClient.getInstance().execute(() -> InputUtils.setUse(false));
-            pauseTicks = 10;
+            pauseTimer.set(10);
             currentState = CState.WAITING_GUI;
         } else {
             BlockPos target = new BlockPos(closest[0], closest[1], closest[2]);
@@ -258,9 +266,9 @@ public class CommissionMacro extends GoatModule {
         commissions.clear();
         currentCommission = null;
         lastCompletedName = null;
-        pauseTicks = 0;
+        pauseTimer.reset();
         miningBot.stop();
-        InputUtils.releaseAll();
+        releaseInputs();
     }
 
     private void readCommissionsFromTab(MinecraftClient client) {
@@ -275,12 +283,7 @@ public class CommissionMacro extends GoatModule {
             if (m.find()) {
                 String name = m.group(1).trim();
                 String progStr = m.group(2);
-                double progress;
-                if ("DONE".equals(progStr)) {
-                    progress = 1.0;
-                } else {
-                    progress = Double.parseDouble(progStr.replace("%", "")) / 100.0;
-                }
+                double progress = SkyBlockTextUtils.parseProgressOrDone(progStr);
                 if (CommissionData.isKnownCommission(name)) {
                     newComms.add(new Commission(name, progress));
                 }
@@ -301,15 +304,6 @@ public class CommissionMacro extends GoatModule {
         return null;
     }
 
-    private static int findItemSlot(ClientPlayerEntity player, String name) {
-        for (int i = 0; i < 9; i++) {
-            ItemStack stack = player.getInventory().getStack(i);
-            if (stack.isEmpty()) continue;
-            if (stack.getName().getString().contains(name)) return i;
-        }
-        return -1;
-    }
-
     private static int[] findClosestWaypoint(ClientPlayerEntity player, int[][] waypoints) {
         int[] closest = waypoints[0];
         double closestDist = Double.MAX_VALUE;
@@ -321,15 +315,11 @@ public class CommissionMacro extends GoatModule {
     }
 
     private static double distance(ClientPlayerEntity player, int[] pos) {
-        double dx = player.getX() - pos[0];
-        double dy = player.getY() - pos[1];
-        double dz = player.getZ() - pos[2];
-        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+        return WorldUtils.distance(player, pos);
     }
 
     private void message(String msg) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) client.player.sendMessage(Text.literal(msg), false);
+        ChatUtils.sendRawMessage(msg);
     }
 
     private record Commission(String name, double progress) {}

@@ -73,6 +73,12 @@ public class MouseUtils {
         wasCursorLocked = false;
     }
 
+    public static void setCursorLockedForMacroInput(boolean locked) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.mouse == null || !mouseUngrabbed) return;
+        ((MouseAccessor) client.mouse).setCursorLocked(locked);
+    }
+
     public static boolean shouldBlockCursorLock() {
         return mouseUngrabbed;
     }

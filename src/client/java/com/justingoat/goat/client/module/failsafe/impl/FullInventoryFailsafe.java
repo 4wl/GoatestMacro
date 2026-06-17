@@ -3,9 +3,10 @@ package com.justingoat.goat.client.module.failsafe.impl;
 import com.justingoat.goat.client.module.failsafe.Failsafe;
 import com.justingoat.goat.client.module.failsafe.FailsafeManager;
 import com.justingoat.goat.client.utils.ChatUtils;
+import com.justingoat.goat.client.utils.ConditionTimer;
 
 public class FullInventoryFailsafe extends Failsafe {
-    private long fullSince = 0L;
+    private final ConditionTimer fullTimer = new ConditionTimer();
 
     @Override
     public int getPriority() { return 3; }
@@ -16,18 +17,16 @@ public class FullInventoryFailsafe extends Failsafe {
     @Override
     public void onTick() {
         if (!FailsafeDetectionUtils.canCheckMacro()) {
-            fullSince = 0L;
+            fullTimer.reset();
             return;
         }
 
         if (!FailsafeDetectionUtils.isInventoryFull()) {
-            fullSince = 0L;
+            fullTimer.reset();
             return;
         }
 
-        long now = System.currentTimeMillis();
-        if (fullSince == 0L) fullSince = now;
-        if (now - fullSince < 600L) return;
+        if (!fullTimer.confirmed(600L)) return;
 
         ChatUtils.sendWarningMessage("Failsafe: inventory is full");
         FailsafeManager.getInstance().triggerEmergency(this);
@@ -40,6 +39,6 @@ public class FullInventoryFailsafe extends Failsafe {
 
     @Override
     public void reset() {
-        fullSince = 0L;
+        fullTimer.reset();
     }
 }
